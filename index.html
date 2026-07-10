@@ -6239,7 +6239,7 @@ function ScanNota({onBack, onDataReady}) {
         status:      'Proses',
         bayar:       extractedData.status_bayar,
         total:       totalCalc,
-        due_date:    null,
+        due_date:    extractedData.due_date||null,
         notes:       [
           extractedData.no_nota?`No. Nota: ${extractedData.no_nota}`:'',
           extractedData.catatan||'',
@@ -6378,6 +6378,19 @@ function ScanNota({onBack, onDataReady}) {
             <input value={extractedData.no_nota}
               onChange={e=>setExtractedData(p=>({...p,no_nota:e.target.value}))}
               placeholder="Nomor nota..."
+              style={{width:'100%',padding:'9px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>⏰ Jatuh Tempo</label>
+            <input type="date" value={extractedData.due_date||''}
+              onChange={e=>setExtractedData(p=>({...p,due_date:e.target.value}))}
+              style={{width:'100%',padding:'9px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>📝 Catatan</label>
+            <input value={extractedData.catatan||''}
+              onChange={e=>setExtractedData(p=>({...p,catatan:e.target.value}))}
+              placeholder="Catatan tambahan..."
               style={{width:'100%',padding:'9px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
           </div>
         </div>
@@ -6675,21 +6688,39 @@ function Pembelian() {
     try {
       await sbUpdate('purchase_orders', po.id, {status:'Diterima'});
       for(const item of po.items||[]) {
-        if(item.product_id) {
-          const prods = await sbGet('products',{eq:{id:item.product_id}});
-          if(prods?.length>0) {
-            const prod = prods[0];
-            await sbUpdate('products', item.product_id, {
-              stock: (prod.stock||0) + (item.qty||0),
-              buy_price: item.price||prod.buy_price||0,
-            });
-            await sbInsert('stock_logs',[{
-              product_id: item.product_id,
-              type: 'masuk',
-              qty: item.qty||0,
-              notes: `Pembelian dari ${po.supplier} - PO-${po.id}`,
-            }]);
-          }
+        let productId = item.product_id;
+        let prod = null;
+
+        // Cari by product_id dulu
+        if(productId) {
+          const prods = await sbGet('products',{eq:{id:productId}});
+          if(prods?.length>0) prod = prods[0];
+        }
+
+        // Kalau tidak ada product_id, cari by nama produk
+        if(!prod && item.name) {
+          const byName = await sbGet('products',{order:'name'});
+          const match = byName.find(p=>
+            p.name.toLowerCase()===item.name.toLowerCase() ||
+            p.name.toLowerCase().includes(item.name.toLowerCase()) ||
+            item.name.toLowerCase().includes(p.name.toLowerCase())
+          );
+          if(match) { prod = match; productId = match.id; }
+        }
+
+        if(prod && productId) {
+          const newStock = (prod.stock||0) + (parseInt(item.qty)||0);
+          const newBuyPrice = item.price ? parseInt(item.price) : (prod.buy_price||0);
+          await sbUpdate('products', productId, {
+            stock: newStock,
+            buy_price: newBuyPrice,
+          });
+          await sbInsert('stock_logs',[{
+            product_id: productId,
+            type: 'masuk',
+            qty: parseInt(item.qty)||0,
+            notes: `Pembelian dari ${po.supplier} - PO-${po.id}`,
+          }]);
         }
       }
       notifyDataChanged('pembelian');
@@ -6742,6 +6773,83 @@ function Pembelian() {
           <span>Total</span><span style={{color:G}}>{fmt(selected.total)}</span>
         </div>
       </div>
+
+      {/* Print Invoice PO */}
+      <button onClick={()=>{
+        const tokoNama = window.TOKO_NAMA||'SURYA LISTRIK';
+        const tokoAlamat = window.TOKO_ALAMAT||'';
+        const tokoTelp = window.TOKO_TELP||'';
+        const items = selected.items||[];
+        const total = selected.total||0;
+        const w = window.open('','_blank','width=800,height=600');
+        w.document.write(`<!DOCTYPE html><html><head><title>Invoice PO-${selected.id}</title>
+        <style>
+          body{font-family:Arial,sans-serif;padding:30px;color:#222;max-width:700px;margin:0 auto}
+          h1{color:#1a472a;font-size:22px;margin:0}
+          .header{display:flex;justify-content:space-between;border-bottom:3px solid #1a472a;padding-bottom:16px;margin-bottom:20px}
+          .badge{background:#E8F5E9;color:#1a472a;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700}
+          table{width:100%;border-collapse:collapse;margin:16px 0}
+          th{background:#1a472a;color:#fff;padding:10px 12px;text-align:left;font-size:13px}
+          td{padding:9px 12px;border-bottom:1px solid #eee;font-size:13px}
+          tr:nth-child(even){background:#f9f9f9}
+          .total-row{font-weight:800;font-size:15px;border-top:2px solid #1a472a}
+          .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;background:#F5F6FA;padding:14px;border-radius:8px}
+          .info-item label{font-size:11px;color:#777;display:block;margin-bottom:2px}
+          .info-item span{font-weight:600;font-size:13px}
+          .footer{text-align:center;margin-top:30px;padding-top:16px;border-top:1px dashed #ccc;color:#777;font-size:12px}
+          @media print{body{padding:10px}button{display:none}}
+        </style></head><body>
+        <div class="header">
+          <div>
+            <h1>${tokoNama}</h1>
+            <div style="font-size:12px;color:#777;margin-top:4px">${tokoAlamat}</div>
+            <div style="font-size:12px;color:#777">Telp: ${tokoTelp}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:18px;font-weight:800;color:#1a472a">INVOICE PEMBELIAN</div>
+            <div style="font-size:13px;color:#777;margin-top:4px">No: PO-${selected.id}</div>
+            <div class="badge">${selected.status}</div>
+          </div>
+        </div>
+        <div class="info-grid">
+          <div class="info-item"><label>Supplier</label><span>${selected.supplier}</span></div>
+          <div class="info-item"><label>Status Bayar</label><span>${selected.bayar}</span></div>
+          <div class="info-item"><label>Tanggal PO</label><span>${selected.created_at?.slice(0,10)||'-'}</span></div>
+          <div class="info-item"><label>Jatuh Tempo</label><span>${selected.due_date||'Tidak ada'}</span></div>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>Nama Produk</th><th style="text-align:center">Qty</th><th style="text-align:right">Harga</th><th style="text-align:right">Subtotal</th></tr></thead>
+          <tbody>
+            ${items.map((item,i)=>`
+              <tr>
+                <td>${i+1}</td>
+                <td>${item.name}</td>
+                <td style="text-align:center">${item.qty}</td>
+                <td style="text-align:right">Rp ${(item.price||0).toLocaleString('id-ID')}</td>
+                <td style="text-align:right">Rp ${((item.qty||0)*(item.price||0)).toLocaleString('id-ID')}</td>
+              </tr>
+            `).join('')}
+            <tr class="total-row">
+              <td colspan="4" style="text-align:right">TOTAL</td>
+              <td style="text-align:right;color:#1a472a">Rp ${total.toLocaleString('id-ID')}</td>
+            </tr>
+          </tbody>
+        </table>
+        ${selected.notes?`<div style="background:#FFF3E0;padding:10px 14px;border-radius:8px;font-size:12px;margin-top:12px">📝 ${selected.notes}</div>`:''}
+        <div class="footer">
+          <div>${tokoNama} · ${tokoAlamat} · ${tokoTelp}</div>
+          <div style="margin-top:4px">Dicetak: ${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</div>
+        </div>
+        <div style="text-align:center;margin-top:20px">
+          <button onclick="window.print()" style="padding:10px 30px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Invoice</button>
+        </div>
+        </body></html>`);
+        w.document.close();
+        w.focus();
+      }}
+        style={{width:'100%',padding:12,background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:10,fontWeight:700,fontSize:14,cursor:'pointer',color:'#1976D2',marginBottom:10}}>
+        🖨️ Print Invoice Pembelian
+      </button>
 
       {selected.status==='Proses' && (
         <button onClick={()=>markReceived(selected)}
