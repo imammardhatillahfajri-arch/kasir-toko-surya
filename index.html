@@ -6194,17 +6194,17 @@ function ScanNota({onBack, onDataReady}) {
 
       // Normalize
       parsed.items = (parsed.items||[]).map(item=>({
-        nama:   item.nama||'',
+        nama:   (item.nama||'').toUpperCase(),
         qty:    parseInt(item.qty)||1,
         harga:  parseInt(item.harga)||0,
-        satuan: item.satuan||'pcs',
+        satuan: (item.satuan||'pcs').toUpperCase(),
         product_id: null,
       }));
-      parsed.supplier     = parsed.supplier||'';
+      parsed.supplier     = (parsed.supplier||'').toUpperCase();
       parsed.tanggal      = parsed.tanggal||new Date().toISOString().slice(0,10);
       parsed.status_bayar = parsed.status_bayar||'Lunas';
       parsed.total        = parseInt(parsed.total)||parsed.items.reduce((s,i)=>s+i.qty*i.harga,0);
-      parsed.catatan      = parsed.catatan||'';
+      parsed.catatan      = (parsed.catatan||'').toUpperCase();
       parsed.no_nota      = parsed.no_nota||'';
       parsed.supplier_id  = '';
       parsed.foto_url     = fotoUrl;
