@@ -1890,20 +1890,58 @@ function Transaksi() {
             </>
           ) : (
             <>
-              {/* Mode: Multi Satuan */}
-              <button onClick={()=>addToCartDirect(unitSelector.product,'Pcs',unitSelector.product.price)}
+              {/* Mode: Multi Satuan - Dynamic dari product fields */}
+              <div style={{marginBottom:10,padding:'8px 12px',background:'#F5F6FA',borderRadius:8,fontSize:11,color:MT}}>
+                📦 Stok: <b>{unitSelector.product?.stock||0} {unitSelector.product?.unit_kecil||'pcs'}</b>
+                {(unitSelector.product?.konversi||1)>1&&(
+                  <span> = <b>{Math.floor((unitSelector.product?.stock||0)/(unitSelector.product?.konversi||1))} {unitSelector.product?.unit_besar}</b></span>
+                )}
+              </div>
+
+              {/* Unit Kecil (Eceran) */}
+              <button onClick={()=>addToCartDirect(unitSelector.product, unitSelector.product?.unit_kecil||'Pcs', unitSelector.product?.price)}
                 style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',background:GL,border:`2px solid ${G}`,borderRadius:12,cursor:'pointer',marginBottom:8}}>
                 <div style={{textAlign:'left'}}>
-                  <div style={{fontWeight:700,fontSize:14,color:TX}}>Pcs <span style={{fontSize:10,background:G,color:'#fff',borderRadius:4,padding:'2px 6px',marginLeft:6}}>ECERAN</span></div>
-                  <div style={{fontSize:12,color:MT,marginTop:2}}>Satuan dasar</div>
+                  <div style={{fontWeight:700,fontSize:14,color:TX}}>
+                    {unitSelector.product?.unit_kecil||'Pcs'}
+                    <span style={{fontSize:10,background:G,color:'#fff',borderRadius:4,padding:'2px 6px',marginLeft:6}}>ECERAN</span>
+                  </div>
+                  <div style={{fontSize:12,color:MT,marginTop:2}}>Satuan kecil / eceran</div>
                 </div>
-                <div style={{fontWeight:800,fontSize:16,color:GD}}>{fmt(unitSelector.product.price)}</div>
+                <div style={{fontWeight:800,fontSize:16,color:GD}}>{fmt(unitSelector.product?.price||0)}</div>
               </button>
+
+              {/* Unit Besar - hanya tampil kalau ada konversi */}
+              {(unitSelector.product?.konversi||1)>1 && unitSelector.product?.harga_besar>0 && (
+                <button onClick={()=>{
+                  // Saat jual unit besar, kurangi stok sesuai konversi
+                  const prod = {...unitSelector.product};
+                  addToCartDirect(
+                    {...prod, _unitBesar: true, _konversi: prod.konversi},
+                    prod.unit_besar,
+                    prod.harga_besar
+                  );
+                }}
+                  style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',background:'#F8F0FF',border:'2px solid #8E44AD',borderRadius:12,cursor:'pointer',marginBottom:8}}>
+                  <div style={{textAlign:'left'}}>
+                    <div style={{fontWeight:700,fontSize:14,color:'#8E44AD'}}>
+                      {unitSelector.product?.unit_besar}
+                      <span style={{fontSize:10,background:'#8E44AD',color:'#fff',borderRadius:4,padding:'2px 6px',marginLeft:6}}>GROSIR</span>
+                    </div>
+                    <div style={{fontSize:12,color:MT,marginTop:2}}>
+                      1 {unitSelector.product?.unit_besar} = {unitSelector.product?.konversi} {unitSelector.product?.unit_kecil||'pcs'}
+                    </div>
+                  </div>
+                  <div style={{fontWeight:800,fontSize:16,color:'#8E44AD'}}>{fmt(unitSelector.product?.harga_besar||0)}</div>
+                </button>
+              )}
+
+              {/* Unit tambahan dari tabel product_units */}
               {(unitSelector.units||[]).filter(u=>u&&u.id).map(u=>(
                 <button key={u.id} onClick={()=>addToCartDirect(unitSelector.product,u.unit_name,u.price)}
                   style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',background:'#F8F0FF',border:'2px solid #8E44AD',borderRadius:12,cursor:'pointer',marginBottom:8}}>
                   <div style={{textAlign:'left'}}>
-                    <div style={{fontWeight:700,fontSize:14,color:TX}}>{u.unit_name} {u.is_default&&<span style={{fontSize:10,background:'#8E44AD',color:'#fff',borderRadius:4,padding:'2px 6px',marginLeft:6}}>DEFAULT</span>}</div>
+                    <div style={{fontWeight:700,fontSize:14,color:TX}}>{u.unit_name}</div>
                     <div style={{fontSize:12,color:MT,marginTop:2}}>{u.ratio&&u.ratio>1?`1 ${u.unit_name} = ${u.ratio} pcs`:'Satuan alternatif'}</div>
                   </div>
                   <div style={{fontWeight:800,fontSize:16,color:'#8E44AD'}}>{fmt(u.price)}</div>
@@ -2484,7 +2522,7 @@ function Manajemen() {
     </div>
     {showForm&&<div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
       <h4 style={{margin:"0 0 12px",fontSize:15}}>{editId?"✏️ Edit Produk":"➕ Tambah Produk"}</h4>
-      {[["name","Nama Produk *","text"],["price","Harga Jual (Rp) *","number"],["buy_price","Harga Beli (Rp)","number"],["stock","Stok","number"],["category","Kategori","text"]].map(([k,label,type])=>(
+      {[["name","Nama Produk *","text"],["price","Harga Jual Eceran (Rp) *","number"],["buy_price","Harga Beli (Rp)","number"],["stock","Stok (unit kecil)","number"],["unit_kecil","Unit Kecil (meter/pcs/buah)","text"],["unit_besar","Unit Besar (roll/box/lusin)","text"],["konversi","Konversi (1 unit besar = ? unit kecil)","number"],["harga_besar","Harga Jual Unit Besar (Rp)","number"],["category","Kategori","text"]].map(([k,label,type])=>(
         <div key={k} style={{marginBottom:8}}>
           <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
           <input value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} placeholder={label} type={type}
@@ -6254,6 +6292,9 @@ function ScanNota({onBack, onDataReady}) {
         price:    item.harga,
         subtotal: item.qty*item.harga,
         product_id: item.product_id||null,
+        satuan:   item.tipe_unit==='besar'
+                    ? (item.satuan||'unit besar')
+                    : (item.satuan||'pcs'),
       })));
       notifyDataChanged('pembelian');
       setStep('done');
@@ -6462,6 +6503,25 @@ function ScanNota({onBack, onDataReady}) {
             </div>
             <div style={{fontSize:11,color:GD,fontWeight:700,textAlign:'right',marginTop:5}}>
               {fmt(item.qty*item.harga)}
+            </div>
+            {/* Pilihan unit besar/kecil */}
+            <div style={{marginTop:8}}>
+              <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:4}}>📦 Tipe Unit dari Supplier</label>
+              <div style={{display:'flex',gap:6}}>
+                <button onClick={()=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,tipe_unit:'kecil'}:it)}))}
+                  style={{flex:1,padding:'7px 4px',border:`1.5px solid ${(item.tipe_unit||'kecil')==='kecil'?G:'#eee'}`,borderRadius:8,background:(item.tipe_unit||'kecil')==='kecil'?GL:'#fff',color:(item.tipe_unit||'kecil')==='kecil'?GD:MT,cursor:'pointer',fontSize:11,fontWeight:(item.tipe_unit||'kecil')==='kecil'?700:500,textAlign:'center'}}>
+                  📦 Unit Kecil<br/><span style={{fontSize:9,color:MT}}>pcs/meter</span>
+                </button>
+                <button onClick={()=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,tipe_unit:'besar'}:it)}))}
+                  style={{flex:1,padding:'7px 4px',border:`1.5px solid ${item.tipe_unit==='besar'?'#8E44AD':'#eee'}`,borderRadius:8,background:item.tipe_unit==='besar'?'#F3E5F5':'#fff',color:item.tipe_unit==='besar'?'#8E44AD':MT,cursor:'pointer',fontSize:11,fontWeight:item.tipe_unit==='besar'?700:500,textAlign:'center'}}>
+                  🎁 Unit Besar<br/><span style={{fontSize:9,color:MT}}>roll/box/lusin</span>
+                </button>
+              </div>
+              {item.tipe_unit==='besar'&&(
+                <div style={{marginTop:4,padding:'5px 8px',background:'#F3E5F5',borderRadius:6,fontSize:10,color:'#8E44AD'}}>
+                  ⚠️ Stok dikonversi ke unit kecil saat PO diterima
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -6682,14 +6742,21 @@ function Pembelian() {
     setSaving(false);
   };
 
-  // Mark received - update stok & harga beli
+  // Mark received - update stok & harga beli + saran harga jual
+  const [priceUpdates, setPriceUpdates] = useState([]); // item yang perlu update harga jual
+  const [showPriceModal, setShowPriceModal] = useState(false);
+  const [pendingPO, setPendingPO] = useState(null);
+
   const markReceived = async(po) => {
     if(!confirm(`Tandai PO-${po.id} sudah diterima? Stok akan diupdate otomatis.`)) return;
     try {
       await sbUpdate('purchase_orders', po.id, {status:'Diterima'});
+      const updates = [];
+
       for(const item of po.items||[]) {
         let productId = item.product_id;
         let prod = null;
+        const newBuyPrice = item.price ? parseInt(item.price) : 0;
 
         // Cari by product_id dulu
         if(productId) {
@@ -6697,23 +6764,47 @@ function Pembelian() {
           if(prods?.length>0) prod = prods[0];
         }
 
-        // Kalau tidak ada product_id, cari by nama produk
+        // Kalau tidak ada product_id, cari by nama produk dengan fuzzy match
         if(!prod && item.name) {
           const byName = await sbGet('products',{order:'name'});
-          const match = byName.find(p=>
-            p.name.toLowerCase()===item.name.toLowerCase() ||
-            p.name.toLowerCase().includes(item.name.toLowerCase()) ||
-            item.name.toLowerCase().includes(p.name.toLowerCase())
-          );
-          if(match) { prod = match; productId = match.id; }
+          const itemWords = item.name.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w=>w.length>1);
+          
+          // Score setiap produk berdasarkan kecocokan kata
+          const scored = byName.map(p=>{
+            const pName = p.name.toLowerCase().replace(/[^a-z0-9\s]/g,'');
+            const pWords = pName.split(/\s+/).filter(w=>w.length>1);
+            let score = 0;
+            // Exact match = score 100
+            if(pName===item.name.toLowerCase()) score=100;
+            // Count matching words
+            else {
+              itemWords.forEach(w=>{ if(pName.includes(w)) score+=10; });
+              pWords.forEach(w=>{ if(item.name.toLowerCase().includes(w)) score+=10; });
+            }
+            return {...p, score};
+          }).filter(p=>p.score>0).sort((a,b)=>b.score-a.score);
+
+          if(scored.length>0 && scored[0].score>=20) {
+            prod = scored[0];
+            productId = scored[0].id;
+          }
         }
 
         if(prod && productId) {
-          const newStock = (prod.stock||0) + (parseInt(item.qty)||0);
-          const newBuyPrice = item.price ? parseInt(item.price) : (prod.buy_price||0);
+          // Konversi qty dari unit besar ke unit kecil
+          const itemUnit = (item.satuan||item.unit||'').toLowerCase();
+          const prodUnitBesar = (prod.unit_besar||'').toLowerCase();
+          const isUnitBesar = prodUnitBesar && prodUnitBesar!=='pcs' && itemUnit &&
+                              (itemUnit===prodUnitBesar || itemUnit.includes(prodUnitBesar) || prodUnitBesar.includes(itemUnit));
+          const konversi = isUnitBesar ? (prod.konversi||1) : 1;
+          const qtyToAdd = (parseInt(item.qty)||0) * konversi;
+
+          // Harga beli per unit kecil
+          const newBuyPricePerUnit = newBuyPrice>0 ? Math.round(newBuyPrice/konversi) : (prod.buy_price||0);
+          const newStock = (prod.stock||0) + qtyToAdd;
           await sbUpdate('products', productId, {
             stock: newStock,
-            buy_price: newBuyPrice,
+            buy_price: newBuyPricePerUnit||prod.buy_price||0,
           });
           await sbInsert('stock_logs',[{
             product_id: productId,
@@ -6721,17 +6812,186 @@ function Pembelian() {
             qty: parseInt(item.qty)||0,
             notes: `Pembelian dari ${po.supplier} - PO-${po.id}`,
           }]);
+
+          // Cek apakah harga beli berubah & harga jual perlu diupdate
+          const oldBuyPrice = prod.buy_price||0;
+          const currentSellPrice = prod.price||0;
+          if(newBuyPrice>0 && newBuyPrice !== oldBuyPrice) {
+            // Saran margin 20%, 30%, 40%
+            const saran20 = Math.ceil(newBuyPrice * 1.20 / 100) * 100;
+            const saran30 = Math.ceil(newBuyPrice * 1.30 / 100) * 100;
+            const saran40 = Math.ceil(newBuyPrice * 1.40 / 100) * 100;
+            updates.push({
+              productId, 
+              name: item.name,        // nama dari nota/PO
+              matchedName: prod.name, // nama di database
+              oldBuyPrice, newBuyPrice,
+              currentSellPrice,
+              saran20, saran30, saran40,
+              newSellPrice: saran20,
+              isNew: false,
+            });
+          }
+        } else if(!prod) {
+          // Produk belum ada di database
+          if(newBuyPrice>0) {
+            const saran20 = Math.ceil(newBuyPrice * 1.20 / 100) * 100;
+            const saran30 = Math.ceil(newBuyPrice * 1.30 / 100) * 100;
+            const saran40 = Math.ceil(newBuyPrice * 1.40 / 100) * 100;
+            // Cari kandidat produk yang mungkin cocok
+            const allProds = await sbGet('products',{order:'name'});
+            const itemWords = item.name.toLowerCase().split(/\s+/).filter(w=>w.length>1);
+            const candidates = allProds.map(p=>{
+              const pName = p.name.toLowerCase();
+              let score = 0;
+              itemWords.forEach(w=>{ if(pName.includes(w)) score+=10; });
+              return {...p,score};
+            }).filter(p=>p.score>0).sort((a,b)=>b.score-a.score).slice(0,5);
+            
+            updates.push({
+              productId: null, name: item.name,
+              matchedName: null,
+              oldBuyPrice: 0, newBuyPrice,
+              currentSellPrice: 0,
+              saran20, saran30, saran40,
+              newSellPrice: saran20,
+              isNew: true,
+              candidates, // produk kandidat untuk dipilih manual
+            });
+          }
         }
       }
+
       notifyDataChanged('pembelian');
       setSelected(s=>({...s,status:'Diterima'}));
       loadOrders();
-      alert('✅ Stok berhasil diupdate!');
+
+      if(updates.length>0) {
+        setPriceUpdates(updates);
+        setPendingPO(po);
+        setShowPriceModal(true);
+      } else {
+        alert('✅ Stok berhasil diupdate!');
+      }
     } catch(e){ alert('Gagal: '+e.message); }
+  };
+
+  const savePriceUpdates = async() => {
+    try {
+      for(const u of priceUpdates) {
+        if(u.productId && u.newSellPrice>0) {
+          await sbUpdate('products', u.productId, {price: parseInt(u.newSellPrice)});
+        }
+      }
+      setShowPriceModal(false);
+      setPriceUpdates([]);
+      notifyDataChanged('products');
+      alert('✅ Stok & harga jual berhasil diupdate!');
+    } catch(e){ alert('Gagal update harga: '+e.message); }
   };
 
   const sC = {Diterima:G, Proses:OR, Dibatalkan:RD};
   const bC = {Lunas:G, Hutang:OR, Belum:RD};
+
+  // ── MODAL: SARAN HARGA JUAL ──
+  if(showPriceModal && priceUpdates.length>0) return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <div style={{background:'#FFF3E0',border:`1px solid ${OR}`,borderRadius:12,padding:'12px 16px',marginBottom:16,fontSize:13}}>
+        <div style={{fontWeight:700,color:OR,marginBottom:4}}>💡 Update Harga Jual</div>
+        <div style={{color:'#7d4e00'}}>Harga beli beberapa produk berubah. Sistem menyarankan harga jual baru agar profit tetap terjaga.</div>
+      </div>
+
+      {priceUpdates.map((u,i)=>(
+        <div key={i} style={{background:'#fff',borderRadius:12,padding:16,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{u.name}</div>
+          {u.matchedName&&u.matchedName!==u.name&&(
+            <div style={{fontSize:11,color:OR,marginBottom:8,background:'#FFF3E0',padding:'4px 8px',borderRadius:6}}>
+              ⚠️ Nama di nota: <b>"{u.name}"</b> → dicocokkan ke: <b>"{u.matchedName}"</b>
+            </div>
+          )}
+          {u.isNew
+            ? <div>
+                <div style={{fontSize:11,color:OR,marginBottom:6,background:'#FFF3E0',padding:'6px 10px',borderRadius:6}}>
+                  ⚠️ Produk ini belum ada di database
+                </div>
+                {u.candidates?.length>0&&(
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:11,color:MT,fontWeight:600,marginBottom:6}}>🔍 Mungkin maksudnya salah satu ini?</div>
+                    {u.candidates.map((c,j)=>(
+                      <button key={j} onClick={()=>setPriceUpdates(prev=>prev.map((p,k)=>k===i?{...p,productId:c.id,matchedName:c.name,currentSellPrice:c.price||0,isNew:false}:p))}
+                        style={{display:'block',width:'100%',padding:'7px 10px',marginBottom:4,background:u.productId===c.id?GL:'#F5F6FA',border:`1.5px solid ${u.productId===c.id?G:'#eee'}`,borderRadius:8,cursor:'pointer',textAlign:'left',fontSize:12}}>
+                        <span style={{fontWeight:600,color:u.productId===c.id?GD:TX}}>{c.name}</span>
+                        <span style={{color:MT,fontSize:10,marginLeft:6}}>Harga jual: {fmt(c.price||0)}</span>
+                      </button>
+                    ))}
+                    <button onClick={()=>setPriceUpdates(prev=>prev.map((p,k)=>k===i?{...p,productId:null,matchedName:null,isNew:true}:p))}
+                      style={{fontSize:11,color:MT,background:'none',border:'none',cursor:'pointer',padding:'4px 0'}}>
+                      Tidak ada yang cocok → biarkan sebagai produk baru
+                    </button>
+                  </div>
+                )}
+              </div>
+            : <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10,fontSize:11}}>
+                <div style={{background:'#F5F6FA',borderRadius:8,padding:'6px 10px'}}>
+                  <div style={{color:MT}}>Harga Beli Lama</div>
+                  <div style={{fontWeight:700,color:MT}}>{fmt(u.oldBuyPrice)}</div>
+                </div>
+                <div style={{background:'#FFF3E0',borderRadius:8,padding:'6px 10px'}}>
+                  <div style={{color:MT}}>Harga Beli Baru</div>
+                  <div style={{fontWeight:700,color:OR}}>{fmt(u.newBuyPrice)}</div>
+                </div>
+                <div style={{background:'#E3F2FD',borderRadius:8,padding:'6px 10px'}}>
+                  <div style={{color:MT}}>Harga Jual Saat Ini</div>
+                  <div style={{fontWeight:700,color:'#1976D2'}}>{fmt(u.currentSellPrice)}</div>
+                </div>
+              </div>
+          }
+
+          {/* Saran margin */}
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:11,color:MT,fontWeight:600,marginBottom:6}}>💡 Saran Harga Jual:</div>
+            <div style={{display:'flex',gap:6}}>
+              {[
+                {label:'20% margin', value:u.saran20},
+                {label:'30% margin', value:u.saran30},
+                {label:'40% margin', value:u.saran40},
+              ].map((s,j)=>(
+                <button key={j} onClick={()=>setPriceUpdates(prev=>prev.map((p,k)=>k===i?{...p,newSellPrice:s.value}:p))}
+                  style={{flex:1,padding:'6px 4px',border:`1.5px solid ${u.newSellPrice===s.value?G:'#eee'}`,borderRadius:8,background:u.newSellPrice===s.value?GL:'#fff',color:u.newSellPrice===s.value?GD:MT,cursor:'pointer',fontSize:10,fontWeight:u.newSellPrice===s.value?700:500,textAlign:'center'}}>
+                  <div style={{fontWeight:700,fontSize:12}}>{fmt(s.value)}</div>
+                  <div style={{fontSize:9,color:MT}}>{s.label}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Input manual */}
+          <div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>✏️ Atau input manual:</label>
+            <input type="number" value={u.newSellPrice}
+              onChange={e=>setPriceUpdates(prev=>prev.map((p,k)=>k===i?{...p,newSellPrice:parseInt(e.target.value)||0}:p))}
+              style={{width:'100%',padding:'9px 12px',border:`1.5px solid ${G}`,borderRadius:8,fontSize:14,fontWeight:700,boxSizing:'border-box'}}/>
+            {u.newSellPrice>0&&u.newBuyPrice>0&&(
+              <div style={{fontSize:11,color:G,marginTop:4}}>
+                Margin: {fmt(u.newSellPrice-u.newBuyPrice)} ({Math.round((u.newSellPrice-u.newBuyPrice)/u.newBuyPrice*100)}%)
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+
+      <div style={{display:'flex',gap:10}}>
+        <button onClick={()=>{setShowPriceModal(false);setPriceUpdates([]);alert('✅ Stok diupdate, harga jual tidak diubah.');}}
+          style={{flex:1,padding:12,background:'#F5F6FA',border:'1px solid #eee',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13}}>
+          Lewati
+        </button>
+        <button onClick={savePriceUpdates}
+          style={{flex:2,padding:12,background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13}}>
+          💾 Update Harga Jual
+        </button>
+      </div>
+    </div>
+  );
 
   // ── VIEW: DETAIL PO ──
   if(view==='detail' && selected) return (
