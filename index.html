@@ -6522,8 +6522,13 @@ function ScanNota({onBack, onDataReady}) {
           <div style={{fontSize:10,color:MT}}>Foto langsung</div>
         </label>
         <label style={{flex:1,padding:'16px 8px',background:'#fff',border:'2px dashed #3498DB',borderRadius:12,cursor:'pointer',textAlign:'center',display:'block'}}>
-          <input type="file" accept="image/*"
-            onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+          <input type="file" accept="image/jpeg,image/png,image/webp,image/jpg,image/*"
+            capture={false}
+            onChange={e=>{
+              const file = e.target.files?.[0];
+              if(file) handleFile(file);
+              e.target.value = ''; // reset supaya bisa pilih file sama
+            }} style={{display:'none'}}/>
           <div style={{fontSize:30,marginBottom:4}}>🖼️</div>
           <div style={{fontSize:12,fontWeight:600,color:'#1976D2'}}>Galeri</div>
           <div style={{fontSize:10,color:MT}}>Pilih foto</div>
