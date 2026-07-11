@@ -6272,6 +6272,38 @@ function ScanNota({onBack, onDataReady}) {
         if(match) parsed.supplier_id = String(match.id);
       }
 
+      // AI Product Matching — 1 call untuk semua item
+      if(parsed.items?.length>0 && window._cachedProducts?.length>0) {
+        try {
+          const prodList = window._cachedProducts.map(p=>p.id+'|'+p.name).join('\n');
+          const itemList = parsed.items.map((it,i)=>(i+1)+'. '+it.nama).join('\n');
+
+          const matchResp = await fetch('/api/analyze-nota', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              matchMode: true,
+              itemList,
+              prodList: prodList.slice(0, 8000), // limit token
+            })
+          });
+
+          if(matchResp.ok) {
+            const matchData = await matchResp.json();
+            if(matchData.matches) {
+              parsed.items = parsed.items.map((it,i)=>{
+                const m = matchData.matches[i+1];
+                if(m && m.product_id) {
+                  const prod = window._cachedProducts.find(p=>p.id===parseInt(m.product_id));
+                  if(prod) return {...it, product_id:prod.id, matched_name:prod.name, match_confidence:m.confidence};
+                }
+                return it;
+              });
+            }
+          }
+        } catch(e){ console.log('AI match failed, using fuzzy:', e.message); }
+      }
+
       setExtractedData(parsed);
       setStep('review');
     } catch(e) {
@@ -6499,6 +6531,14 @@ function ScanNota({onBack, onDataReady}) {
             </div>
 
             {/* Match ke produk database */}
+            {item.product_id && item.match_confidence && (
+              <div style={{fontSize:10,marginBottom:4,padding:'3px 8px',borderRadius:6,display:'inline-block',
+                background:item.match_confidence==='high'?GL:item.match_confidence==='medium'?'#FFF3E0':'#F5F6FA',
+                color:item.match_confidence==='high'?GD:item.match_confidence==='medium'?OR:MT}}>
+                🤖 AI Match: {item.match_confidence==='high'?'Sangat Yakin ✅':item.match_confidence==='medium'?'Kemungkinan Besar ⚡':'Perkiraan 🤔'}
+                {item.matched_name&&` → "${item.matched_name}"`}
+              </div>
+            )}
             {!item.product_id ? (
               <div style={{marginBottom:8}}>
                 <div style={{fontSize:10,color:MT,fontWeight:600,marginBottom:4}}>🔍 Cocokkan ke produk di database:</div>
@@ -6511,12 +6551,30 @@ function ScanNota({onBack, onDataReady}) {
                   style={{width:'100%',padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,background:'#fff',marginBottom:4}}>
                   <option value="">-- Pilih produk yang cocok --</option>
                   {(window._cachedProducts||[])
-                    .filter(p=>{
-                      const q = item.nama.toLowerCase();
-                      const words = q.split(/\s+/).filter(w=>w.length>1);
+                    .map(p=>{
+                      const q = (item.nama||'').toLowerCase().trim();
                       const pName = p.name.toLowerCase();
-                      return words.some(w=>pName.includes(w));
+                      // Kata-kata dari query (min 2 karakter, skip kata umum)
+                      const stopWords = ['dan','ke','di','dari','atau','yang','untuk','per','x','no','uk'];
+                      const qWords = q.split(/[\s\-\/,]+/).filter(w=>w.length>=2&&!stopWords.includes(w));
+                      const pWords = pName.split(/[\s\-\/,]+/).filter(w=>w.length>=2&&!stopWords.includes(w));
+                      
+                      let score = 0;
+                      // Exact match = tertinggi
+                      if(pName===q) score+=100;
+                      // Setiap kata query yang ada di nama produk
+                      qWords.forEach(w=>{ if(pName.includes(w)) score+=20; });
+                      // Setiap kata produk yang ada di query
+                      pWords.forEach(w=>{ if(q.includes(w)) score+=10; });
+                      // Bonus kalau kata pertama sama
+                      if(qWords[0]&&pWords[0]&&pWords[0].startsWith(qWords[0])) score+=15;
+                      // Bonus kalau urutan kata sama
+                      qWords.forEach((w,i)=>{ if(pWords[i]&&pWords[i].includes(w)) score+=5; });
+                      
+                      return {...p, score};
                     })
+                    .filter(p=>p.score>=20)
+                    .sort((a,b)=>b.score-a.score)
                     .slice(0,10)
                     .map(p=>(
                       <option key={p.id} value={p.id}>
@@ -6851,22 +6909,24 @@ function Pembelian() {
         // Kalau tidak ada product_id, cari by nama produk dengan fuzzy match
         if(!prod && item.name) {
           const byName = await sbGet('products',{order:'name'});
-          const itemWords = item.name.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(w=>w.length>1);
-          
-          // Score setiap produk berdasarkan kecocokan kata
+          const q = item.name.toLowerCase().trim();
+          const stopWords = ['dan','ke','di','dari','atau','yang','untuk','per','x','no','uk'];
+          const itemWords = q.split(/[\s\-\/,]+/).filter(w=>w.length>=2&&!stopWords.includes(w));
+
+          // Score setiap produk berdasarkan kecocokan kata - lebih pintar
           const scored = byName.map(p=>{
-            const pName = p.name.toLowerCase().replace(/[^a-z0-9\s]/g,'');
-            const pWords = pName.split(/\s+/).filter(w=>w.length>1);
+            const pName = p.name.toLowerCase();
+            const pWords = pName.split(/[\s\-\/,]+/).filter(w=>w.length>=2&&!stopWords.includes(w));
             let score = 0;
-            // Exact match = score 100
-            if(pName===item.name.toLowerCase()) score=100;
-            // Count matching words
+            if(pName===q) score=100;
             else {
-              itemWords.forEach(w=>{ if(pName.includes(w)) score+=10; });
-              pWords.forEach(w=>{ if(item.name.toLowerCase().includes(w)) score+=10; });
+              itemWords.forEach(w=>{ if(pName.includes(w)) score+=20; });
+              pWords.forEach(w=>{ if(q.includes(w)) score+=10; });
+              if(itemWords[0]&&pWords[0]&&pWords[0].startsWith(itemWords[0])) score+=15;
+              itemWords.forEach((w,i)=>{ if(pWords[i]&&pWords[i].includes(w)) score+=5; });
             }
             return {...p, score};
-          }).filter(p=>p.score>0).sort((a,b)=>b.score-a.score);
+          }).filter(p=>p.score>=20).sort((a,b)=>b.score-a.score);
 
           if(scored.length>0 && scored[0].score>=20) {
             prod = scored[0];
@@ -6924,13 +6984,21 @@ function Pembelian() {
             const saran40 = Math.ceil(newBuyPrice * 1.40 / 100) * 100;
             // Cari kandidat produk yang mungkin cocok
             const allProds = await sbGet('products',{order:'name'});
-            const itemWords = item.name.toLowerCase().split(/\s+/).filter(w=>w.length>1);
+            const qc = item.name.toLowerCase().trim();
+            const stopWordsC = ['dan','ke','di','dari','atau','yang','untuk','per','x'];
+            const itemWordsC = qc.split(/[\s\-\/,]+/).filter(w=>w.length>=2&&!stopWordsC.includes(w));
             const candidates = allProds.map(p=>{
               const pName = p.name.toLowerCase();
+              const pWords = pName.split(/[\s\-\/,]+/).filter(w=>w.length>=2);
               let score = 0;
-              itemWords.forEach(w=>{ if(pName.includes(w)) score+=10; });
+              if(pName===qc) score=100;
+              else {
+                itemWordsC.forEach(w=>{ if(pName.includes(w)) score+=20; });
+                pWords.forEach(w=>{ if(qc.includes(w)) score+=10; });
+                if(itemWordsC[0]&&pWords[0]&&pWords[0].startsWith(itemWordsC[0])) score+=15;
+              }
               return {...p,score};
-            }).filter(p=>p.score>0).sort((a,b)=>b.score-a.score).slice(0,5);
+            }).filter(p=>p.score>=20).sort((a,b)=>b.score-a.score).slice(0,5);
             
             updates.push({
               productId: null, name: item.name,
