@@ -4835,19 +4835,42 @@ function LaporanPenjualan() {
                               <label style={{fontSize:11,color:MT,fontWeight:600}}>Item Transaksi</label>
                               <button onClick={addEditItem} style={{padding:'3px 10px',background:GL,border:`1px solid ${G}`,borderRadius:6,cursor:'pointer',fontSize:11,color:GD,fontWeight:600}}>+ Item</button>
                             </div>
-                            {editItems.map(item=>(
-                              <div key={item.id} style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr auto',gap:6,marginBottom:6}}>
-                                <select value={item.product_id||''} onChange={e=>selectEditProduct(item.id,e.target.value)}
-                                  style={{padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:11,background:'#fff'}}>
-                                  <option value="">{item.product_name||'-- Pilih Produk --'}</option>
-                                  {products.slice(0,200).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-                                </select>
-                                <input value={item.qty} onChange={e=>updateEditItem(item.id,'qty',e.target.value)} type="number" min="1" placeholder="Qty"
-                                  style={{padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:11,boxSizing:'border-box'}}/>
-                                <input value={item.price} onChange={e=>updateEditItem(item.id,'price',e.target.value)} type="number" placeholder="Harga"
-                                  style={{padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:11,boxSizing:'border-box'}}/>
-                                <button onClick={()=>removeEditItem(item.id)}
-                                  style={{padding:'6px 8px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:7,cursor:'pointer',color:RD,fontSize:11}}>🗑️</button>
+                            {editItems.map((item,ii)=>(
+                              <div key={item.id||ii} style={{background:'#F5F6FA',borderRadius:10,padding:10,marginBottom:8}}>
+                                {/* Search produk */}
+                                <div style={{position:'relative',marginBottom:6}}>
+                                  <select value={item.product_id||''} onChange={e=>selectEditProduct(item.id,e.target.value)}
+                                    style={{width:'100%',padding:'8px 10px',border:`1.5px solid ${item.product_id?G:'#eee'}`,borderRadius:8,fontSize:12,background:'#fff',boxSizing:'border-box'}}>
+                                    <option value="">{item.product_name||'-- Pilih Produk --'}</option>
+                                    {(window._cachedProducts||products).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                                  </select>
+                                </div>
+                                {item.product_name&&<div style={{fontSize:10,color:GD,marginBottom:6,fontWeight:600}}>✅ {item.product_name}</div>}
+                                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:6}}>
+                                  <div>
+                                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty</label>
+                                    <div style={{display:'flex',alignItems:'center',gap:4}}>
+                                      <button onClick={()=>updateEditItem(item.id,'qty',Math.max(1,(parseInt(item.qty)||1)-1))}
+                                        style={{width:26,height:26,borderRadius:'50%',background:'#eee',border:'none',cursor:'pointer',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>−</button>
+                                      <input value={item.qty} onChange={e=>updateEditItem(item.id,'qty',parseInt(e.target.value)||1)}
+                                        type="number" min="1"
+                                        style={{flex:1,padding:'5px 6px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,textAlign:'center',boxSizing:'border-box'}}/>
+                                      <button onClick={()=>updateEditItem(item.id,'qty',(parseInt(item.qty)||1)+1)}
+                                        style={{width:26,height:26,borderRadius:'50%',background:GL,border:`1px solid ${G}`,cursor:'pointer',fontSize:14,color:GD,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>+</button>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Harga</label>
+                                    <input value={item.price} onChange={e=>updateEditItem(item.id,'price',e.target.value)}
+                                      type="number" placeholder="Harga"
+                                      style={{width:'100%',padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                                  </div>
+                                </div>
+                                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                                  <span style={{fontSize:11,color:GD,fontWeight:700}}>Subtotal: {fmt((parseInt(item.qty)||0)*(parseInt(item.price)||0))}</span>
+                                  <button onClick={()=>setEditItems(prev=>prev.filter(i=>i.id!==item.id))}
+                                    style={{padding:'4px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:7,cursor:'pointer',color:RD,fontSize:11}}>🗑️ Hapus</button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -6144,7 +6167,12 @@ function ScanNota({onBack, onDataReady}) {
     sbGet('suppliers',{order:'name'}).then(s=>setSuppliers(s||[])).catch(()=>{});
     // Load products cache untuk matching
     if(!window._cachedProducts||window._cachedProducts.length===0) {
-      sbGetAll('products',{order:'name'}).then(p=>{ window._cachedProducts=p||[]; }).catch(()=>{});
+      sbGetAll('products',{order:'name'}).then(p=>{
+        window._cachedProducts=p||[];
+        console.log('[ScanNota] Products loaded:', p?.length);
+      }).catch(e=>console.error('[ScanNota] Cache error:', e));
+    } else {
+      console.log('[ScanNota] Products cache hit:', window._cachedProducts.length);
     }
   },[]);
 
@@ -6379,11 +6407,15 @@ function ScanNota({onBack, onDataReady}) {
         <h2 style={{margin:0,fontSize:17,fontWeight:800}}>🤖 Review Hasil Scan</h2>
       </div>
 
-      <div style={{background:'#E8F5E9',border:`1px solid ${G}`,borderRadius:10,padding:'10px 14px',marginBottom:12,fontSize:12,color:'#1b5e20',display:'flex',gap:8,alignItems:'center'}}>
+      <div style={{background:'#E8F5E9',border:`1px solid ${G}`,borderRadius:10,padding:'10px 14px',marginBottom:12,fontSize:12,color:'#1b5e20',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
         <span>✅</span>
         <span>AI berhasil membaca nota! Periksa dan edit data sebelum disimpan.</span>
-        {uploadingPhoto&&<span style={{color:OR}}>⏳ Mengupload foto...</span>}
+        {uploadingPhoto&&<span style={{color:OR}}>⏳ Upload foto...</span>}
         {photoUrl&&!uploadingPhoto&&<span style={{color:G}}>📎 Foto tersimpan!</span>}
+        {extractedData?.items?.some(i=>i.product_id)&&(
+          <span style={{color:'#1976D2'}}>🤖 AI cocokkan {extractedData.items.filter(i=>i.product_id).length} produk</span>
+        )}
+        {!window._cachedProducts?.length&&<span style={{color:OR}}>⏳ Memuat data produk...</span>}
       </div>
 
       {/* Preview foto */}
@@ -6546,7 +6578,8 @@ function ScanNota({onBack, onDataReady}) {
                   const val = e.target.value;
                   if(!val) return;
                   const prod = (window._cachedProducts||[]).find(p=>p.id===parseInt(val));
-                  if(prod) setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:prod.id,nama:prod.name,harga:prod.buy_price||it.harga}:it)}));
+                  // Harga beli TETAP dari nota, tidak diganti dari database
+                  if(prod) setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:prod.id,nama:prod.name}:it)}));
                 }}
                   style={{width:'100%',padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,background:'#fff',marginBottom:4}}>
                   <option value="">-- Pilih produk yang cocok --</option>
@@ -6781,6 +6814,8 @@ function Pembelian() {
   const [form, setForm] = useState({supplier_id:'', bayar:'Lunas', due:'', notes:''});
   const [editPO, setEditPO] = useState(false);
   const [editItems, setEditItems] = useState([]);
+  const [showAddSupplierPem, setShowAddSupplierPem] = useState(false);
+  const [newSupForm, setNewSupForm] = useState({});
 
   // Load suppliers & orders
   const loadOrders = async() => {
@@ -6834,15 +6869,24 @@ function Pembelian() {
 
   // Cart helpers
   const addToCart = (prod) => {
+    const isBesar = prod._forceBesar;
+    const cartKey = prod.id + (isBesar?'_besar':'_kecil');
     setCart(prev=>{
-      const exist = prev.find(i=>i.product.id===prod.id);
-      if(exist) return prev.map(i=>i.product.id===prod.id?{...i,qty:i.qty+1}:i);
-      return [...prev, {product:prod, qty:1, price:prod.buy_price||0}];
+      const exist = prev.find(i=>i.cartKey===cartKey);
+      if(exist) return prev.map(i=>i.cartKey===cartKey?{...i,qty:i.qty+1}:i);
+      return [...prev, {
+        product: prod,
+        cartKey,
+        qty: 1,
+        price: isBesar ? (prod.harga_besar||prod.buy_price||0) : (prod.buy_price||0),
+        unit: isBesar ? (prod.unit_besar||'unit') : (prod.unit_kecil||'pcs'),
+        isBesar,
+      }];
     });
   };
-  const updateQty = (prodId, qty) => {
-    if(qty<=0) { setCart(prev=>prev.filter(i=>i.product.id!==prodId)); return; }
-    setCart(prev=>prev.map(i=>i.product.id===prodId?{...i,qty}:i));
+  const updateQty = (key, qty) => {
+    if(qty<=0) { setCart(prev=>prev.filter(i=>(i.cartKey||i.product.id)!==key)); return; }
+    setCart(prev=>prev.map(i=>(i.cartKey||i.product.id)===key?{...i,qty}:i));
   };
   const updatePrice = (prodId, price) => {
     setCart(prev=>prev.map(i=>i.product.id===prodId?{...i,price:parseInt(price)||0}:i));
@@ -7486,9 +7530,9 @@ function Pembelian() {
               <div>
                 <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Qty</label>
                 <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <button onClick={()=>updateQty(item.product.id, item.qty-1)}
+                  <button onClick={()=>updateQty(item.cartKey||item.product.id, item.qty-1)}
                     style={{width:30,height:30,borderRadius:'50%',background:'#F5F6FA',border:'1px solid #eee',cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>−</button>
-                  <input value={item.qty} onChange={e=>updateQty(item.product.id,parseInt(e.target.value)||1)}
+                  <input value={item.qty} onChange={e=>updateQty(item.cartKey||item.product.id,parseInt(e.target.value)||1)}
                     type="number" min="1"
                     style={{width:50,textAlign:'center',padding:'6px',border:'1.5px solid #eee',borderRadius:8,fontSize:13}}/>
                   <button onClick={()=>updateQty(item.product.id, item.qty+1)}
@@ -7650,7 +7694,7 @@ function Pembelian() {
                 <button onClick={()=>updateQty(item.product.id,item.qty-1)}
                   style={{width:24,height:24,borderRadius:'50%',background:'#eee',border:'none',cursor:'pointer',fontSize:14,fontWeight:700}}>−</button>
                 <span style={{fontWeight:700,color:G,minWidth:20,textAlign:'center'}}>{item.qty}</span>
-                <button onClick={()=>updateQty(item.product.id,item.qty+1)}
+                <button onClick={()=>updateQty(item.cartKey||item.product.id,item.qty+1)}
                   style={{width:24,height:24,borderRadius:'50%',background:GL,border:`1px solid ${G}`,cursor:'pointer',fontSize:14,color:GD,fontWeight:700}}>+</button>
                 <span style={{color:MT,fontSize:11,marginLeft:4}}>×</span>
               </div>
@@ -7671,13 +7715,47 @@ function Pembelian() {
           <div style={{padding:'12px 14px',borderTop:'2px solid #eee',flexShrink:0,background:'#F5F6FA'}}>
             {/* Supplier */}
             <div style={{marginBottom:8}}>
-              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Supplier *</label>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:3}}>
+                <label style={{fontSize:11,color:MT,fontWeight:600}}>Supplier *</label>
+                <button onClick={()=>setShowAddSupplierPem(v=>!v)}
+                  style={{fontSize:10,color:G,background:'none',border:'none',cursor:'pointer',fontWeight:600}}>
+                  + Tambah Baru
+                </button>
+              </div>
               <select value={form.supplier_id} onChange={e=>setForm(f=>({...f,supplier_id:e.target.value}))}
                 style={{width:'100%',padding:'8px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}>
                 <option value="">-- Pilih --</option>
                 {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
+            {/* Form tambah supplier */}
+            {showAddSupplierPem&&(
+              <div style={{background:'#E8F5E9',borderRadius:10,padding:10,marginBottom:8,border:`1px solid ${G}30`}}>
+                <div style={{fontSize:11,fontWeight:700,color:GD,marginBottom:6}}>➕ Tambah Supplier Baru</div>
+                {[['newSupName','Nama *'],['newSupPhone','Telp'],['newSupAddress','Alamat']].map(([k,label])=>(
+                  <input key={k} value={newSupForm[k]||''} onChange={e=>setNewSupForm(f=>({...f,[k]:e.target.value}))}
+                    placeholder={label}
+                    style={{width:'100%',padding:'7px 10px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box',marginBottom:5}}/>
+                ))}
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>setShowAddSupplierPem(false)}
+                    style={{flex:1,padding:'7px 0',background:'#eee',border:'none',borderRadius:7,cursor:'pointer',fontSize:11}}>Batal</button>
+                  <button onClick={async()=>{
+                    if(!newSupForm.newSupName) return alert('Nama supplier wajib!');
+                    try {
+                      const [sup] = await sbInsert('suppliers',[{name:newSupForm.newSupName,phone:newSupForm.newSupPhone||'',address:newSupForm.newSupAddress||''}]);
+                      setSuppliers(prev=>[...prev,sup]);
+                      setForm(f=>({...f,supplier_id:String(sup.id)}));
+                      setNewSupForm({});
+                      setShowAddSupplierPem(false);
+                      alert('✅ Supplier berhasil ditambahkan!');
+                    } catch(e){ alert('Gagal: '+e.message); }
+                  }} style={{flex:2,padding:'7px 0',background:G,color:'#fff',border:'none',borderRadius:7,fontWeight:700,cursor:'pointer',fontSize:11}}>
+                    💾 Simpan
+                  </button>
+                </div>
+              </div>
+            )}
             {/* Status bayar */}
             <div style={{display:'flex',gap:5,marginBottom:8}}>
               {['Lunas','Hutang','Belum'].map(opt=>(
