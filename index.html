@@ -6142,6 +6142,10 @@ function ScanNota({onBack, onDataReady}) {
 
   useEffect(()=>{
     sbGet('suppliers',{order:'name'}).then(s=>setSuppliers(s||[])).catch(()=>{});
+    // Load products cache untuk matching
+    if(!window._cachedProducts||window._cachedProducts.length===0) {
+      sbGetAll('products',{order:'name'}).then(p=>{ window._cachedProducts=p||[]; }).catch(()=>{});
+    }
   },[]);
 
   const handleFile = (file) => {
@@ -6224,10 +6228,22 @@ function ScanNota({onBack, onDataReady}) {
 
       let parsed;
       try {
-        parsed = await response.json();
+        const rawText = await response.text();
+        // Coba parse JSON
+        try {
+          parsed = JSON.parse(rawText);
+        } catch(jsonErr) {
+          // Kalau bukan JSON, coba extract JSON dari text
+          const jsonMatch = rawText.match(/[{][\s\S]*[}]/);
+          if(jsonMatch) {
+            parsed = JSON.parse(jsonMatch[0]);
+          } else {
+            throw new Error('AI tidak bisa membaca nota ini. Pastikan foto jelas dan terang!');
+          }
+        }
         if(parsed.error) throw new Error(parsed.error);
       } catch(e) {
-        throw new Error('Gagal membaca data dari nota. Pastikan foto jelas dan terang.');
+        throw new Error('Gagal membaca nota: '+e.message+'. Pastikan foto jelas dan terang!');
       }
 
       // Normalize
@@ -6475,12 +6491,78 @@ function ScanNota({onBack, onDataReady}) {
           <div key={i} style={{background:'#F5F6FA',borderRadius:10,padding:10,marginBottom:8}}>
             <div style={{display:'flex',gap:6,marginBottom:6}}>
               <input value={item.nama}
-                onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,nama:e.target.value}:it)}))}
+                onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,nama:e.target.value,product_id:null,matched:false}:it)}))}
                 placeholder="Nama barang"
-                style={{flex:1,padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+                style={{flex:1,padding:'7px 10px',border:`1.5px solid ${item.product_id?G:'#eee'}`,borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
               <button onClick={()=>setExtractedData(p=>({...p,items:p.items.filter((_,j)=>j!==i)}))}
                 style={{padding:'7px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,cursor:'pointer',color:RD,fontSize:12,flexShrink:0}}>🗑️</button>
             </div>
+
+            {/* Match ke produk database */}
+            {!item.product_id ? (
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:MT,fontWeight:600,marginBottom:4}}>🔍 Cocokkan ke produk di database:</div>
+                <select onChange={e=>{
+                  const val = e.target.value;
+                  if(!val) return;
+                  const prod = (window._cachedProducts||[]).find(p=>p.id===parseInt(val));
+                  if(prod) setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:prod.id,nama:prod.name,harga:prod.buy_price||it.harga}:it)}));
+                }}
+                  style={{width:'100%',padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,background:'#fff',marginBottom:4}}>
+                  <option value="">-- Pilih produk yang cocok --</option>
+                  {(window._cachedProducts||[])
+                    .filter(p=>{
+                      const q = item.nama.toLowerCase();
+                      const words = q.split(/\s+/).filter(w=>w.length>1);
+                      const pName = p.name.toLowerCase();
+                      return words.some(w=>pName.includes(w));
+                    })
+                    .slice(0,10)
+                    .map(p=>(
+                      <option key={p.id} value={p.id}>
+                        {p.name} · Stok:{p.stock} · Beli:{fmt(p.buy_price||0)}
+                      </option>
+                    ))
+                  }
+                </select>
+                <div style={{fontSize:10,color:OR,marginBottom:4}}>⚠️ Belum dicocokkan — stok tidak akan terupdate saat diterima</div>
+                <button onClick={async()=>{
+                  // Tambah produk baru langsung dari sini
+                  const namaProduk = item.nama;
+                  const hargaBeli  = item.harga||0;
+                  const saran20    = Math.ceil(hargaBeli*1.20/100)*100;
+                  if(!confirm(`Tambah "${namaProduk}" sebagai produk baru?
+Harga beli: ${fmt(hargaBeli)}
+Harga jual saran: ${fmt(saran20)}`)) return;
+                  try {
+                    const [newProd] = await sbInsert('products',[{
+                      name:      namaProduk,
+                      price:     markup20,
+                      buy_price: hargaBeli,
+                      stock:     0,
+                      category:  'Lainnya',
+                      unit_kecil:'pcs',
+                      unit_besar:'pcs',
+                      konversi:  1,
+                    }]);
+                    // Update cache
+                    if(window._cachedProducts) window._cachedProducts.push(newProd);
+                    // Set product_id di item ini
+                    setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:newProd.id,nama:newProd.name}:it)}));
+                    alert('✅ Produk baru berhasil ditambahkan!');
+                  } catch(e){ alert('Gagal tambah produk: '+e.message); }
+                }}
+                  style={{width:'100%',padding:'7px 0',background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:8,cursor:'pointer',color:'#1976D2',fontWeight:700,fontSize:11}}>
+                  ➕ Tambah sebagai Produk Baru
+                </button>
+              </div>
+            ) : (
+              <div style={{marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center',background:GL,borderRadius:8,padding:'5px 10px'}}>
+                <div style={{fontSize:11,color:GD,fontWeight:600}}>✅ Cocok dengan produk di database</div>
+                <button onClick={()=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:null}:it)}))}
+                  style={{fontSize:10,color:MT,background:'none',border:'none',cursor:'pointer'}}>Batalkan</button>
+              </div>
+            )}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 80px',gap:6}}>
               <div>
                 <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Harga Beli (Rp)</label>
@@ -6639,6 +6721,8 @@ function Pembelian() {
 
   // Checkout form
   const [form, setForm] = useState({supplier_id:'', bayar:'Lunas', due:'', notes:''});
+  const [editPO, setEditPO] = useState(false);
+  const [editItems, setEditItems] = useState([]);
 
   // Load suppliers & orders
   const loadOrders = async() => {
@@ -6822,13 +6906,13 @@ function Pembelian() {
             const saran30 = Math.ceil(newBuyPrice * 1.30 / 100) * 100;
             const saran40 = Math.ceil(newBuyPrice * 1.40 / 100) * 100;
             updates.push({
-              productId, 
-              name: item.name,        // nama dari nota/PO
-              matchedName: prod.name, // nama di database
+              productId,
+              name: item.name,
+              matchedName: prod.name,
               oldBuyPrice, newBuyPrice,
               currentSellPrice,
               saran20, saran30, saran40,
-              newSellPrice: saran20,
+              newSellPrice: saran20, // default markup 20%
               isNew: false,
             });
           }
@@ -6950,15 +7034,32 @@ function Pembelian() {
           {/* Saran margin */}
           <div style={{marginBottom:10}}>
             <div style={{fontSize:11,color:MT,fontWeight:600,marginBottom:6}}>💡 Saran Harga Jual:</div>
-            <div style={{display:'flex',gap:6}}>
+            {/* Mark Up */}
+            <div style={{fontSize:10,color:MT,fontWeight:600,marginBottom:4}}>📈 Mark Up (dari harga beli):</div>
+            <div style={{display:'flex',gap:5,marginBottom:8}}>
               {[
-                {label:'20% margin', value:u.saran20},
-                {label:'30% margin', value:u.saran30},
-                {label:'40% margin', value:u.saran40},
+                {label:'MU 20%', value:Math.ceil(u.newBuyPrice*1.20/100)*100},
+                {label:'MU 30%', value:Math.ceil(u.newBuyPrice*1.30/100)*100},
+                {label:'MU 40%', value:Math.ceil(u.newBuyPrice*1.40/100)*100},
               ].map((s,j)=>(
                 <button key={j} onClick={()=>setPriceUpdates(prev=>prev.map((p,k)=>k===i?{...p,newSellPrice:s.value}:p))}
                   style={{flex:1,padding:'6px 4px',border:`1.5px solid ${u.newSellPrice===s.value?G:'#eee'}`,borderRadius:8,background:u.newSellPrice===s.value?GL:'#fff',color:u.newSellPrice===s.value?GD:MT,cursor:'pointer',fontSize:10,fontWeight:u.newSellPrice===s.value?700:500,textAlign:'center'}}>
-                  <div style={{fontWeight:700,fontSize:12}}>{fmt(s.value)}</div>
+                  <div style={{fontWeight:700,fontSize:11}}>{fmt(s.value)}</div>
+                  <div style={{fontSize:9,color:MT}}>{s.label}</div>
+                </button>
+              ))}
+            </div>
+            {/* Margin */}
+            <div style={{fontSize:10,color:MT,fontWeight:600,marginBottom:4}}>💹 Margin (dari harga jual):</div>
+            <div style={{display:'flex',gap:5}}>
+              {[
+                {label:'Margin 20%', value:Math.ceil(u.newBuyPrice/(1-0.20)/100)*100},
+                {label:'Margin 30%', value:Math.ceil(u.newBuyPrice/(1-0.30)/100)*100},
+                {label:'Margin 40%', value:Math.ceil(u.newBuyPrice/(1-0.40)/100)*100},
+              ].map((s,j)=>(
+                <button key={j} onClick={()=>setPriceUpdates(prev=>prev.map((p,k)=>k===i?{...p,newSellPrice:s.value}:p))}
+                  style={{flex:1,padding:'6px 4px',border:`1.5px solid ${u.newSellPrice===s.value?'#8E44AD':'#eee'}`,borderRadius:8,background:u.newSellPrice===s.value?'#F3E5F5':'#fff',color:u.newSellPrice===s.value?'#8E44AD':MT,cursor:'pointer',fontSize:10,fontWeight:u.newSellPrice===s.value?700:500,textAlign:'center'}}>
+                  <div style={{fontWeight:700,fontSize:11}}>{fmt(s.value)}</div>
                   <div style={{fontSize:9,color:MT}}>{s.label}</div>
                 </button>
               ))}
@@ -6972,8 +7073,16 @@ function Pembelian() {
               onChange={e=>setPriceUpdates(prev=>prev.map((p,k)=>k===i?{...p,newSellPrice:parseInt(e.target.value)||0}:p))}
               style={{width:'100%',padding:'9px 12px',border:`1.5px solid ${G}`,borderRadius:8,fontSize:14,fontWeight:700,boxSizing:'border-box'}}/>
             {u.newSellPrice>0&&u.newBuyPrice>0&&(
-              <div style={{fontSize:11,color:G,marginTop:4}}>
-                Margin: {fmt(u.newSellPrice-u.newBuyPrice)} ({Math.round((u.newSellPrice-u.newBuyPrice)/u.newBuyPrice*100)}%)
+              <div style={{fontSize:11,marginTop:4,display:'flex',gap:12}}>
+                <span style={{color:G}}>
+                  Mark Up: {Math.round((u.newSellPrice-u.newBuyPrice)/u.newBuyPrice*100)}%
+                </span>
+                <span style={{color:'#8E44AD'}}>
+                  Margin: {Math.round((u.newSellPrice-u.newBuyPrice)/u.newSellPrice*100)}%
+                </span>
+                <span style={{color:TX}}>
+                  Untung: {fmt(u.newSellPrice-u.newBuyPrice)}
+                </span>
               </div>
             )}
           </div>
@@ -6992,6 +7101,146 @@ function Pembelian() {
       </div>
     </div>
   );
+
+  // ── VIEW: EDIT PO ──
+  if(view==='detail' && selected && editPO) {
+    const [editForm, setEditForm] = React.useState({
+      supplier:    selected.supplier||'',
+      bayar:       selected.bayar||'Lunas',
+      due_date:    selected.due_date||'',
+      notes:       selected.notes||'',
+      status:      selected.status||'Proses',
+    });
+    const [items, setItems] = React.useState(
+      (selected.items||[]).map(i=>({...i, name:i.name||'', qty:i.qty||1, price:i.price||0}))
+    );
+    const [savingEdit, setSavingEdit] = React.useState(false);
+
+    const saveEdit = async() => {
+      if(!editForm.supplier) return alert('Nama supplier wajib!');
+      if(items.length===0) return alert('Minimal 1 item!');
+      setSavingEdit(true);
+      try {
+        const totalEdit = items.reduce((s,i)=>s+(i.qty*i.price),0);
+        await sbUpdate('purchase_orders', selected.id, {
+          supplier:  editForm.supplier,
+          bayar:     editForm.bayar,
+          due_date:  editForm.due_date||null,
+          notes:     editForm.notes||'',
+          status:    editForm.status,
+          total:     totalEdit,
+        });
+        // Delete & reinsert items
+        const sb = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+        await sb.from('po_items').delete().eq('po_id', selected.id);
+        await sbInsert('po_items', items.map(i=>({
+          po_id: selected.id,
+          name: i.name,
+          qty: parseInt(i.qty)||1,
+          price: parseInt(i.price)||0,
+          subtotal: (parseInt(i.qty)||1)*(parseInt(i.price)||0),
+          product_id: i.product_id||null,
+          satuan: i.satuan||'pcs',
+        })));
+        notifyDataChanged('pembelian');
+        loadOrders();
+        setEditPO(false);
+        setSelected(s=>({...s,...editForm,total:totalEdit,items}));
+        alert('✅ PO berhasil diupdate!');
+      } catch(e){ alert('Gagal: '+e.message); }
+      setSavingEdit(false);
+    };
+
+    return (
+      <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+          <button onClick={()=>setEditPO(false)} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:14,padding:0}}>←</button>
+          <h2 style={{margin:0,fontSize:17,fontWeight:800}}>✏️ Edit PO-{selected.id}</h2>
+        </div>
+
+        {/* Form supplier */}
+        <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{marginBottom:10}}>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Supplier</label>
+            <input value={editForm.supplier} onChange={e=>setEditForm(f=>({...f,supplier:e.target.value}))}
+              style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+            <div>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Status Bayar</label>
+              <select value={editForm.bayar} onChange={e=>setEditForm(f=>({...f,bayar:e.target.value}))}
+                style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
+                {['Lunas','Hutang','Belum'].map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Status PO</label>
+              <select value={editForm.status} onChange={e=>setEditForm(f=>({...f,status:e.target.value}))}
+                style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
+                {['Proses','Diterima','Dibatalkan'].map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{marginBottom:10}}>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Jatuh Tempo</label>
+            <input type="date" value={editForm.due_date} onChange={e=>setEditForm(f=>({...f,due_date:e.target.value}))}
+              style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Catatan</label>
+            <input value={editForm.notes} onChange={e=>setEditForm(f=>({...f,notes:e.target.value}))}
+              placeholder="Catatan..." style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+        </div>
+
+        {/* Edit items */}
+        <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:700,fontSize:13}}>🛒 Daftar Barang</div>
+            <button onClick={()=>setItems(prev=>[...prev,{name:'',qty:1,price:0,satuan:'pcs',product_id:null}])}
+              style={{padding:'5px 12px',background:GL,border:`1px solid ${G}`,borderRadius:8,cursor:'pointer',color:GD,fontWeight:700,fontSize:12}}>
+              + Item
+            </button>
+          </div>
+          {items.map((item,i)=>(
+            <div key={i} style={{background:'#F5F6FA',borderRadius:10,padding:10,marginBottom:8}}>
+              <div style={{display:'flex',gap:6,marginBottom:6}}>
+                <input value={item.name} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,name:e.target.value}:it))}
+                  placeholder="Nama barang"
+                  style={{flex:1,padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+                <button onClick={()=>setItems(prev=>prev.filter((_,j)=>j!==i))}
+                  style={{padding:'7px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,cursor:'pointer',color:RD,fontSize:12}}>🗑️</button>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                <div>
+                  <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty</label>
+                  <input type="number" value={item.qty} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,qty:parseInt(e.target.value)||0}:it))}
+                    style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,textAlign:'center',boxSizing:'border-box'}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Harga Beli</label>
+                  <input type="number" value={item.price} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,price:parseInt(e.target.value)||0}:it))}
+                    style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:GD,fontWeight:700,textAlign:'right',marginTop:5}}>
+                {fmt(item.qty*item.price)}
+              </div>
+            </div>
+          ))}
+          <div style={{display:'flex',justifyContent:'space-between',fontWeight:800,fontSize:15,paddingTop:8,borderTop:`2px solid ${G}`}}>
+            <span>Total</span>
+            <span style={{color:G}}>{fmt(items.reduce((s,i)=>s+i.qty*i.price,0))}</span>
+          </div>
+        </div>
+
+        <button onClick={saveEdit} disabled={savingEdit}
+          style={{width:'100%',padding:14,background:savingEdit?MT:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,fontSize:15,cursor:'pointer'}}>
+          {savingEdit?'⏳ Menyimpan...':'💾 Simpan Perubahan'}
+        </button>
+      </div>
+    );
+  }
 
   // ── VIEW: DETAIL PO ──
   if(view==='detail' && selected) return (
@@ -7110,6 +7359,31 @@ function Pembelian() {
         style={{width:'100%',padding:12,background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:10,fontWeight:700,fontSize:14,cursor:'pointer',color:'#1976D2',marginBottom:10}}>
         🖨️ Print Invoice Pembelian
       </button>
+
+      {/* Action buttons */}
+      <div style={{display:'flex',gap:8,marginBottom:10}}>
+        {selected.status==='Proses'&&(
+          <button onClick={()=>setEditPO(true)}
+            style={{flex:1,padding:12,background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:10,fontWeight:700,cursor:'pointer',color:'#1976D2',fontSize:13}}>
+            ✏️ Edit PO
+          </button>
+        )}
+        <button onClick={async()=>{
+          if(!confirm(`Hapus PO-${selected.id}? Data tidak bisa dikembalikan!`)) return;
+          try {
+            const sb = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+            await sb.from('po_items').delete().eq('po_id', selected.id);
+            await sb.from('purchase_orders').delete().eq('id', selected.id);
+            notifyDataChanged('pembelian');
+            loadOrders();
+            setView('list');
+            alert('✅ PO berhasil dihapus!');
+          } catch(e){ alert('Gagal hapus: '+e.message); }
+        }}
+          style={{flex:1,padding:12,background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:10,fontWeight:700,cursor:'pointer',color:RD,fontSize:13}}>
+          🗑️ Hapus PO
+        </button>
+      </div>
 
       {selected.status==='Proses' && (
         <button onClick={()=>markReceived(selected)}
