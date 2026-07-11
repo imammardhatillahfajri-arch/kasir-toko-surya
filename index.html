@@ -661,7 +661,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
     setDeleting(true);
     try {
       // Delete transaction items first
-      const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      const sb = window.supabase.createClient(SB_URL, SB_KEY);
       await sb.from('transaction_items').delete().eq('transaction_id', txId);
       await sb.from('transactions').delete().eq('id', txId);
       notifyDataChanged('transaction');
@@ -4642,7 +4642,7 @@ function LaporanPenjualan() {
 
       // Hapus items lama & insert baru
       // Supabase: delete where transaction_id
-      const sb = window._sb || (window._sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY));
+      const sb = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
       await sb.from('transaction_items').delete().eq('transaction_id', selected.id);
       await sbInsert('transaction_items', editItems.map(i=>({
         transaction_id: selected.id,
@@ -4933,6 +4933,48 @@ function LaporanPenjualan() {
                             <span style={{fontWeight:700}}>Total Baru</span>
                             <span style={{fontWeight:800,color:GD,fontSize:15}}>{fmt(editTotal)}</span>
                           </div>
+
+                          {/* Notifikasi selisih pembayaran */}
+                          {editTotal !== selected.total && (()=>{
+                            const selisih = editTotal - selected.total;
+                            const isNaik  = selisih > 0;
+                            return (
+                              <div style={{
+                                marginTop:10,
+                                padding:'12px 14px',
+                                background: isNaik ? '#FFF3E0' : '#E8F5E9',
+                                border: `1.5px solid ${isNaik ? OR : G}`,
+                                borderRadius:10,
+                              }}>
+                                <div style={{fontWeight:700,fontSize:13,color: isNaik?OR:GD,marginBottom:4}}>
+                                  {isNaik ? '💳 Tagih Tambahan ke Pelanggan' : '💵 Kembalikan ke Pelanggan'}
+                                </div>
+                                <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
+                                  <span style={{color:MT}}>Total lama</span>
+                                  <span style={{fontWeight:600}}>{fmt(selected.total)}</span>
+                                </div>
+                                <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
+                                  <span style={{color:MT}}>Total baru</span>
+                                  <span style={{fontWeight:600}}>{fmt(editTotal)}</span>
+                                </div>
+                                <div style={{display:'flex',justifyContent:'space-between',fontSize:14,paddingTop:6,borderTop:`1px solid ${isNaik?OR:G}`,marginTop:4}}>
+                                  <span style={{fontWeight:700,color:isNaik?OR:GD}}>
+                                    {isNaik ? '➕ Kurang bayar' : '➖ Lebih bayar'}
+                                  </span>
+                                  <span style={{fontWeight:800,fontSize:15,color:isNaik?OR:GD}}>
+                                    {fmt(Math.abs(selisih))}
+                                  </span>
+                                </div>
+                                <div style={{fontSize:11,color:MT,marginTop:6}}>
+                                  {isNaik
+                                    ? `Pelanggan perlu membayar tambahan ${fmt(Math.abs(selisih))} lagi`
+                                    : `Kembalikan ${fmt(Math.abs(selisih))} ke pelanggan`
+                                  }
+                                </div>
+                              </div>
+                            );
+                          })()}
+
                         </div>
                       )}
 
@@ -6244,7 +6286,7 @@ function ScanNota({onBack, onDataReady}) {
   const uploadFoto = async(file) => {
     setUploadingPhoto(true);
     try {
-      const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      const sb = window.supabase.createClient(SB_URL, SB_KEY);
       const ext = file.name?.split('.').pop() || 'jpg';
       const filename = `nota-pembelian/${Date.now()}.${ext}`;
       const { data, error } = await sb.storage.from('toko-assets').upload(filename, file, {
@@ -7395,10 +7437,54 @@ function Pembelian() {
             </div>
           ))}
           <div style={{display:'flex',justifyContent:'space-between',fontWeight:800,fontSize:15,paddingTop:8,borderTop:`2px solid ${G}`}}>
-            <span>Total</span>
+            <span>Total Baru</span>
             <span style={{color:G}}>{fmt(items.reduce((s,i)=>s+i.qty*i.price,0))}</span>
           </div>
         </div>
+
+        {/* Notifikasi selisih pembayaran ke supplier */}
+        {(()=>{
+          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
+          const totalLama = selected.total||0;
+          const selisih   = totalBaru - totalLama;
+          if(selisih===0) return null;
+          const isNaik = selisih>0;
+          return (
+            <div style={{
+              marginBottom:12,
+              padding:'12px 14px',
+              background: isNaik?'#FFF3E0':'#E8F5E9',
+              border:`1.5px solid ${isNaik?OR:G}`,
+              borderRadius:10,
+            }}>
+              <div style={{fontWeight:700,fontSize:13,color:isNaik?OR:GD,marginBottom:6}}>
+                {isNaik?'💸 Tagihan ke Supplier Bertambah':'💰 Tagihan ke Supplier Berkurang'}
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:3}}>
+                <span style={{color:MT}}>Total lama</span>
+                <span style={{fontWeight:600}}>{fmt(totalLama)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:6}}>
+                <span style={{color:MT}}>Total baru</span>
+                <span style={{fontWeight:600}}>{fmt(totalBaru)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:14,paddingTop:6,borderTop:`1px solid ${isNaik?OR:G}`}}>
+                <span style={{fontWeight:700,color:isNaik?OR:GD}}>
+                  {isNaik?'➕ Tambah bayar ke supplier':'➖ Kurang bayar ke supplier'}
+                </span>
+                <span style={{fontWeight:800,fontSize:15,color:isNaik?OR:GD}}>
+                  {fmt(Math.abs(selisih))}
+                </span>
+              </div>
+              <div style={{fontSize:11,color:MT,marginTop:6}}>
+                {isNaik
+                  ? `Hutang ke supplier bertambah ${fmt(Math.abs(selisih))}`
+                  : `Hutang ke supplier berkurang ${fmt(Math.abs(selisih))}`
+                }
+              </div>
+            </div>
+          );
+        })()}
 
         <button onClick={saveEdit} disabled={savingEdit}
           style={{width:'100%',padding:14,background:savingEdit?MT:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,fontSize:15,cursor:'pointer'}}>
