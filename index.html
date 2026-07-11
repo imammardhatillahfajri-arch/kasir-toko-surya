@@ -1224,6 +1224,17 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
   ])].filter(v=>v>=total).slice(0,4);
 
   const processPayment = async() => {
+    // Validasi qty tidak boleh 0
+    const invalidQty = cart.filter(i=>(parseInt(i.qty)||0)<=0);
+    if(invalidQty.length>0) return alert('Qty tidak boleh 0!\nProduk: '+invalidQty.map(i=>i.name).join(', '));
+    // Validasi stok cukup (skip kalau bypass mode aktif)
+    if(!bypassStok) {
+      const outOfStock = cart.filter(i=>{
+        const need = i._unitBesar?(parseInt(i.qty)||0)*(i._konversi||1):(parseInt(i.qty)||0);
+        return need>(i.stock||0);
+      });
+      if(outOfStock.length>0) return alert('Stok tidak cukup!\nProduk: '+outOfStock.map(i=>i.name).join(', '));
+    }
     if(statusBayar==='Lunas' && (!paid||paidNum<total)) return alert('Nominal bayar kurang!');
     setSaving(true);
     try {
@@ -1240,7 +1251,26 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
         transaction_id:tx.id,product_id:item.id,
         product_name:item.name,price:item.price,qty:item.qty
       })));
-      await Promise.all(cart.map(item=>sbUpdate('products',item.id,{stock:Math.max(0,item.stock-item.qty)})));
+      // FIFO: update stok dari batch terlama
+      await Promise.all(cart.map(async item=>{
+        const pid = item.id||item.product_id;
+        if(!pid) return;
+        const qtyOut = item._unitBesar?(item.qty*(item._konversi||1)):item.qty;
+        // Ambil batches urut terlama
+        const batches = await sbGet('stock_batches',{eq:{product_id:pid},order:'tanggal_masuk',asc:true}).catch(()=>[]);
+        const availBatches = (batches||[]).filter(b=>b.qty_sisa>0);
+        let qtyLeft = qtyOut;
+        for(const batch of availBatches) {
+          if(qtyLeft<=0) break;
+          const ambil = Math.min(batch.qty_sisa, qtyLeft);
+          await sbUpdate('stock_batches', batch.id, {qty_sisa: batch.qty_sisa - ambil}).catch(()=>{});
+          qtyLeft -= ambil;
+        }
+        // Update total stok
+        await sbUpdate('products', pid, {stock: Math.max(0,(item.stock||0)-qtyOut)});
+        // Log FIFO keluar
+        await sbInsert('stock_logs',[{product_id:pid,type:'keluar',qty:qtyOut,notes:'Penjualan FIFO'}]).catch(()=>{});
+      }));
 
       // ── Otomatis catat ke Hutang Piutang kalau statusnya Piutang ──
       if(statusBayar==='Piutang') {
@@ -1571,6 +1601,16 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
           </div>
         )}
 
+        {/* Bypass stok warning */}
+        {bypassStok&&(
+          <div style={{marginBottom:8,padding:'8px 12px',background:'#FFF3E0',border:`1.5px solid ${OR}`,borderRadius:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:11,fontWeight:700,color:OR}}>🔓 Bypass Stok AKTIF</div>
+              <div style={{fontSize:10,color:'#7d4e00'}}>Stok tidak dicek saat transaksi!</div>
+            </div>
+          </div>
+        )}
+
         {/* Tombol Bayar */}
         <button onClick={processPayment}
           disabled={saving||(statusBayar==='Lunas'&&(!paid||paidNum<total))}
@@ -1725,6 +1765,7 @@ function Transaksi() {
   const [search, setSearch] = useState('');
   const [activeCat, setActiveCat] = useState('Semua');
   const [loading, setLoading] = useState(true);
+  const [bypassStok, setBypassStok] = useState(false); // mode bypass stok
   const [error, setError] = useState(null);
 
   const load = useCallback(async()=>{
@@ -1987,6 +2028,14 @@ function Transaksi() {
                 <rect x="22" y="13" width="1" height="10"/>
               </svg>
             </button>
+            {/* Bypass Stok Toggle */}
+            <button onClick={()=>{
+              if(!bypassStok){if(!confirm('⚠️ Aktifkan bypass stok?\nStok tidak akan dicek. Gunakan jika stok belum terupdate!')) return;}
+              setBypassStok(v=>!v);
+            }} title={bypassStok?'Bypass stok AKTIF':'Bypass stok nonaktif'}
+              style={{width:42,height:42,borderRadius:10,background:bypassStok?OR:'#F5F6FA',border:`1.5px solid ${bypassStok?OR:'#eee'}`,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:16}}>
+              {bypassStok?'🔓':'🔒'}
+            </button>
           </div>
         </div>
 
@@ -2102,7 +2151,7 @@ function Transaksi() {
               <button onClick={()=>setShowMobileCart(false)} style={{background:'#eee',border:'none',borderRadius:'50%',width:30,height:30,cursor:'pointer',fontSize:16,fontWeight:700}}>×</button>
             </div>
             <div style={{flex:1,overflowY:'auto'}}>
-              <PanelKanan cart={cart} setCart={setCart} updateQty={updateQty} updatePrice={updatePrice} clearCart={()=>{clearCart();setShowMobileCart(false);}} reload={load} onSuccess={()=>setShowMobileCart(false)}/>
+              <PanelKanan cart={cart} setCart={setCart} updateQty={updateQty} updatePrice={updatePrice} clearCart={()=>{clearCart();setShowMobileCart(false);}} reload={load} onSuccess={()=>setShowMobileCart(false)} bypassStok={bypassStok}/>
             </div>
           </div>
         </div>
@@ -2118,6 +2167,7 @@ function Transaksi() {
           clearCart={clearCart}
           reload={load}
           onSuccess={()=>{}}
+          bypassStok={bypassStok}
         />
       </div>
     </div>
@@ -4975,6 +5025,93 @@ function LaporanPenjualan() {
                             );
                           })()}
 
+                          {/* Tombol Print Invoice Revisi */}
+                          {editTotal !== selected.total && (
+                            <button onClick={()=>{
+                              const oldItms = txItems;
+                              const newItms = editItems;
+                              const oldTot  = selected.total||0;
+                              const newTot  = editTotal;
+                              const selisih = newTot - oldTot;
+                              const toko    = window.TOKO_NAMA||'SURYA LISTRIK';
+                              const w = window.open('','_blank','width=760,height=680');
+                              w.document.write(`<!DOCTYPE html><html><head><title>Invoice Revisi</title>
+                              <style>
+                                body{font-family:Arial,sans-serif;padding:20px;color:#222;max-width:680px;margin:0 auto;font-size:12px}
+                                h2{margin:0;font-size:16px}
+                                .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+                                table{width:100%;border-collapse:collapse;margin:6px 0}
+                                th{background:#f5f5f5;padding:6px 8px;text-align:left;font-size:10px;color:#777;font-weight:700}
+                                td{padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:11px}
+                                .added{background:#E8F5E9}
+                                .removed{background:#FFEBEE;text-decoration:line-through;color:#999}
+                                .box{padding:12px;border-radius:8px;margin:12px 0}
+                                .hdr{font-weight:700;font-size:11px;margin-bottom:6px;color:#777;text-transform:uppercase}
+                                @media print{button{display:none!important}}
+                              </style></head><body>
+                              <div style="display:flex;justify-content:space-between;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:14px">
+                                <div><h2>${toko}</h2><div style="color:#777;font-size:10px">${window.TOKO_ALAMAT||''}</div></div>
+                                <div style="text-align:right">
+                                  <div style="font-size:14px;font-weight:800;color:#C62828">INVOICE REVISI</div>
+                                  <div style="color:#777">#${selected.invoice_no||'INV-'+selected.id}</div>
+                                  <div style="color:#777">Pelanggan: ${selected.customer||'Umum'}</div>
+                                  <div style="color:#777">${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</div>
+                                </div>
+                              </div>
+
+                              <div class="grid">
+                                <div>
+                                  <div class="hdr">📋 Invoice Lama</div>
+                                  <table>
+                                    <thead><tr><th>Produk</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead>
+                                    <tbody>
+                                      ${oldItms.map(i=>`<tr><td>${i.product_name||i.name}</td><td>${i.qty}</td><td style="text-align:right">Rp ${((i.qty||0)*(i.price||0)).toLocaleString('id-ID')}</td></tr>`).join('')}
+                                      <tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;text-align:right;border-top:2px solid #eee">Rp ${oldTot.toLocaleString('id-ID')}</td></tr>
+                                    </tbody>
+                                  </table>
+                                </div>
+                                <div>
+                                  <div class="hdr" style="color:#1a472a">📋 Invoice Baru</div>
+                                  <table>
+                                    <thead><tr><th>Produk</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead>
+                                    <tbody>
+                                      ${newItms.map(i=>{
+                                        const isNew=!oldItms.find(o=>o.product_id===i.product_id);
+                                        return `<tr class="${isNew?'added':''}"><td>${i.product_name}${isNew?' ✨':''}</td><td>${i.qty}</td><td style="text-align:right">Rp ${((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')}</td></tr>`;
+                                      }).join('')}
+                                      ${oldItms.filter(o=>!newItms.find(n=>n.product_id===o.product_id)).map(i=>`<tr class="removed"><td>${i.product_name||i.name} ❌</td><td>${i.qty}</td><td style="text-align:right">Rp ${((i.qty||0)*(i.price||0)).toLocaleString('id-ID')}</td></tr>`).join('')}
+                                      <tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;text-align:right;border-top:2px solid #1a472a;color:#1a472a">Rp ${newTot.toLocaleString('id-ID')}</td></tr>
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+
+                              <div class="box" style="background:${selisih>0?'#FFF3E0':'#E8F5E9'};border:2px solid ${selisih>0?'#F57C00':'#2e7d32'}">
+                                <div style="font-weight:800;font-size:14px;color:${selisih>0?'#E65100':'#1a472a'};margin-bottom:8px">
+                                  ${selisih>0?'💳 TAGIHAN TAMBAHAN KE PELANGGAN':'💵 PENGEMBALIAN DANA KE PELANGGAN'}
+                                </div>
+                                <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Total Lama</span><span>Rp ${oldTot.toLocaleString('id-ID')}</span></div>
+                                <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Total Baru</span><span>Rp ${newTot.toLocaleString('id-ID')}</span></div>
+                                <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding-top:8px;border-top:2px solid ${selisih>0?'#F57C00':'#2e7d32'}">
+                                  <span>${selisih>0?'Kurang Bayar':'Kembalikan ke Pelanggan'}</span>
+                                  <span style="color:${selisih>0?'#E65100':'#1a472a'}">Rp ${Math.abs(selisih).toLocaleString('id-ID')}</span>
+                                </div>
+                                <div style="font-size:10px;color:#777;margin-top:6px">
+                                  ${selisih>0?`Pelanggan wajib membayar tambahan Rp ${Math.abs(selisih).toLocaleString('id-ID')}`:`Kembalikan Rp ${Math.abs(selisih).toLocaleString('id-ID')} kepada pelanggan`}
+                                </div>
+                              </div>
+
+                              <div style="text-align:center;margin-top:16px">
+                                <button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700">🖨️ Print Invoice Revisi</button>
+                              </div>
+                              </body></html>`);
+                              w.document.close(); w.focus();
+                            }}
+                              style={{width:'100%',padding:10,background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:12,color:'#1976D2',marginTop:8}}>
+                              🖨️ Print Invoice Revisi
+                            </button>
+                          )}
+
                         </div>
                       )}
 
@@ -5913,7 +6050,7 @@ function ArusKeuanganDetail({onBack}) {
               </div>
             </div>
             <div style={{background:'#F5F6FA',borderRadius:10,padding:'14px 0',textAlign:'center'}}>
-              <div style={{fontSize:24,fontWeight:900,color:neto>=0?G:RD}}>{fmt(data.neto)}</div>
+              <div style={{fontSize:24,fontWeight:900,color:(data.neto||0)>=0?G:RD}}>{fmt(data.neto)}</div>
               <div style={{fontSize:11,color:MT,marginTop:4}}>Pendapatan Neto</div>
             </div>
           </div>
@@ -7090,12 +7227,21 @@ function Pembelian() {
             stock: newStock,
             buy_price: newBuyPricePerUnit||prod.buy_price||0,
           });
+          // FIFO: catat batch masuk
+          await sbInsert('stock_batches',[{
+            product_id:   productId,
+            po_id:        po.id,
+            qty_awal:     qtyToAdd,
+            qty_sisa:     qtyToAdd,
+            buy_price:    newBuyPricePerUnit||prod.buy_price||0,
+            tanggal_masuk: po.created_at?.slice(0,10)||new Date().toISOString().slice(0,10),
+          }]).catch(e=>console.log('batch insert error:',e));
           await sbInsert('stock_logs',[{
             product_id: productId,
             type: 'masuk',
-            qty: parseInt(item.qty)||0,
-            notes: `Pembelian dari ${po.supplier} - PO-${po.id}`,
-          }]);
+            qty: qtyToAdd,
+            notes: 'Pembelian dari '+po.supplier+' - PO-'+po.id,
+          }]).catch(()=>{});
 
           // Cek apakah harga beli berubah & harga jual perlu diupdate
           const oldBuyPrice = prod.buy_price||0;
@@ -7483,6 +7629,43 @@ function Pembelian() {
                 }
               </div>
             </div>
+          );
+        })()}
+
+        {/* Print Invoice Revisi PO */}
+        {(()=>{
+          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
+          const totalLama = selected.total||0;
+          if(totalBaru===totalLama) return null;
+          const selisih = totalBaru - totalLama;
+          return (
+            <button onClick={()=>{
+              const toko = window.TOKO_NAMA||'SURYA LISTRIK';
+              const w = window.open('','_blank','width=760,height=680');
+              w.document.write('<!DOCTYPE html><html><head><title>Revisi PO</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:680px;margin:0 auto;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}table{width:100%;border-collapse:collapse;margin:6px 0}th{background:#f5f5f5;padding:6px 8px;text-align:left;font-size:10px;color:#777}td{padding:6px 8px;border-bottom:1px solid #f0f0f0}.added{background:#E8F5E9}.removed{background:#FFEBEE;text-decoration:line-through;color:#999}.box{padding:12px;border-radius:8px;margin:12px 0}@media print{button{display:none}}</style></head><body>'+
+                '<div style="display:flex;justify-content:space-between;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:14px"><div><b style="font-size:16px">'+toko+'</b></div><div style="text-align:right"><b style="font-size:14px;color:#C62828">REVISI PURCHASE ORDER</b><br/>PO-'+selected.id+'<br/>Supplier: '+selected.supplier+'<br/>'+new Date().toLocaleDateString('id-ID')+'</div></div>'+
+                '<div class="grid">'+
+                '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#777">📋 PO LAMA</div><table><thead><tr><th>Barang</th><th>Qty</th><th>Total</th></tr></thead><tbody>'+
+                (selected.items||[]).map(i=>'<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
+                '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;border-top:2px solid #eee">Rp '+totalLama.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
+                '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#1a472a">📋 PO BARU</div><table><thead><tr><th>Barang</th><th>Qty</th><th>Total</th></tr></thead><tbody>'+
+                items.map(i=>{ const isNew=!(selected.items||[]).find(o=>o.name===i.name); return '<tr class="'+(isNew?'added':'')+'"><td>'+i.name+(isNew?' ✨':'')+'</td><td>'+i.qty+'</td><td>Rp '+((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')+'</td></tr>'; }).join('')+
+                (selected.items||[]).filter(o=>!items.find(n=>n.name===o.name)).map(i=>'<tr class="removed"><td>'+i.name+' ❌</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
+                '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;border-top:2px solid #1a472a;color:#1a472a">Rp '+totalBaru.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
+                '</div>'+
+                '<div class="box" style="background:'+(selisih>0?'#FFF3E0':'#E8F5E9')+';border:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
+                '<b style="color:'+(selisih>0?'#E65100':'#1a472a')+';font-size:14px">'+(selisih>0?'💸 TAGIHAN BERTAMBAH':'💰 TAGIHAN BERKURANG')+'</b><br/><br/>'+
+                '<div style="display:flex;justify-content:space-between"><span>Total PO Lama</span><span>Rp '+totalLama.toLocaleString('id-ID')+'</span></div>'+
+                '<div style="display:flex;justify-content:space-between"><span>Total PO Baru</span><span>Rp '+totalBaru.toLocaleString('id-ID')+'</span></div>'+
+                '<div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding-top:8px;border-top:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
+                '<span>'+(selisih>0?'Tambah Bayar':'Kurang Bayar')+'</span><span style="color:'+(selisih>0?'#E65100':'#1a472a')+'">Rp '+Math.abs(selisih).toLocaleString('id-ID')+'</span></div></div>'+
+                '<div style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700">🖨️ Print</button></div>'+
+                '</body></html>');
+              w.document.close(); w.focus();
+            }}
+              style={{width:'100%',padding:10,background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:12,color:'#1976D2',marginBottom:8}}>
+              🖨️ Print Invoice Revisi PO
+            </button>
           );
         })()}
 
