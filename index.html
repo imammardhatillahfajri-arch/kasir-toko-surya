@@ -6546,8 +6546,7 @@ function ScanNota({onBack, onDataReady}) {
                   const val = e.target.value;
                   if(!val) return;
                   const prod = (window._cachedProducts||[]).find(p=>p.id===parseInt(val));
-                  // Harga beli TETAP dari nota, tidak diganti dari database
-                  if(prod) setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:prod.id,nama:prod.name}:it)}));
+                  if(prod) setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:prod.id,nama:prod.name,harga:prod.buy_price||it.harga}:it)}));
                 }}
                   style={{width:'100%',padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,background:'#fff',marginBottom:4}}>
                   <option value="">-- Pilih produk yang cocok --</option>
