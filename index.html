@@ -181,14 +181,21 @@ function LoginPage({onLogin}) {
   const [pendingUser, setPendingUser] = useState(null);
 
   const handleLogin = async() => {
-    if(!username||!password) return setError('Username & password wajib!');
+    if(!username||!password) return setError('Email & password wajib!');
     setLoading(true); setError('');
     try {
-      const users = await sbGet('app_users',{eq:{username:username.toLowerCase().trim()}});
-      if(!users||users.length===0) { setError('Username tidak ditemukan!'); setLoading(false); return; }
-      const user = users[0];
-      if(!user.is_active) { setError('Akun tidak aktif!'); setLoading(false); return; }
-      if(user.password !== password) { setError('Password salah!'); setLoading(false); return; }
+      const email = username.toLowerCase().trim();
+      // 1. Autentikasi ke Supabase Auth (identitas resmi database)
+      const { error:authErr } = await sb.auth.signInWithPassword({ email, password });
+      if(authErr) {
+        setError(/invalid/i.test(authErr.message)?'Email atau password salah!':'Error: '+authErr.message);
+        setLoading(false); return;
+      }
+      // 2. Ambil profil aplikasi (nama, role, PIN) dari app_users
+      const users = await sbGet('app_users',{eq:{email}});
+      const user = users?.[0];
+      if(!user) { await sb.auth.signOut(); setError('Akun login ada, tapi belum terdaftar sebagai pengguna aplikasi. Hubungi admin.'); setLoading(false); return; }
+      if(!user.is_active) { await sb.auth.signOut(); setError('Akun tidak aktif!'); setLoading(false); return; }
       if(user.pin) { setPendingUser(user); setMode('pin'); setPin(''); }
       else { setSession(user); onLogin(user); }
     } catch(e) { setError('Error: '+e.message); }
@@ -217,8 +224,8 @@ function LoginPage({onLogin}) {
         {mode==='login' ? (
           <>
             <div style={{marginBottom:12}}>
-              <label style={{fontSize:12,fontWeight:600,color:MT,display:'block',marginBottom:4}}>Username</label>
-              <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Username"
+              <label style={{fontSize:12,fontWeight:600,color:MT,display:'block',marginBottom:4}}>Email</label>
+              <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Email" type="email"
                 onKeyDown={e=>e.key==='Enter'&&handleLogin()}
                 style={{width:'100%',padding:'12px 14px',border:'1.5px solid #eee',borderRadius:10,fontSize:14,outline:'none',boxSizing:'border-box'}}
                 onFocus={e=>e.target.style.borderColor=G} onBlur={e=>e.target.style.borderColor='#eee'}/>
@@ -9679,7 +9686,7 @@ function PengaturanUser({currentUser, onBack}) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId]   = useState(null);
-  const [form, setForm]       = useState({username:'',password:'',nama:'',role:'kasir',pin:'',is_active:true});
+  const [form, setForm]       = useState({email:'',username:'',nama:'',role:'kasir',pin:'',is_active:true});
   const [saving, setSaving]   = useState(false);
 
   const load = async()=>{
@@ -9693,15 +9700,22 @@ function PengaturanUser({currentUser, onBack}) {
   useEffect(()=>{load();},[]);
 
   const save = async()=>{
-    if(!form.username||!form.password||!form.nama) return alert('Username, password & nama wajib!');
+    if(!form.email||!form.nama) return alert('Email & nama wajib!');
     setSaving(true);
     try {
-      const data = {...form, username:form.username.toLowerCase().trim()};
+      const email = form.email.toLowerCase().trim();
+      const data = {
+        email,
+        username: (form.username||email.split('@')[0]).toLowerCase().trim(),
+        nama: form.nama, role: form.role, pin: form.pin||'', is_active: form.is_active,
+      };
+      const isNew = !editId;
       if(editId) { await sbUpdate('app_users',editId,data); }
       else { await sbInsert('app_users',[data]); }
       setShowForm(false); setEditId(null);
-      setForm({username:'',password:'',nama:'',role:'kasir',pin:'',is_active:true});
+      setForm({email:'',username:'',nama:'',role:'kasir',pin:'',is_active:true});
       load();
+      if(isNew) alert(`✅ Profil pengguna tersimpan!\n\n⚠️ LANGKAH TERAKHIR: buat akun login-nya di Supabase Dashboard →\nAuthentication → Users → Add user\ndengan email yang sama persis:\n${email}\n\n(centang "Auto Confirm User")`);
     } catch(e){ alert('Gagal: '+e.message); }
     setSaving(false);
   };
@@ -9717,18 +9731,18 @@ function PengaturanUser({currentUser, onBack}) {
       <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
         {onBack&&<button onClick={onBack} style={{background:GL,border:`1px solid ${G}`,borderRadius:8,padding:'6px 12px',cursor:'pointer',fontWeight:700,color:GD}}>← Kembali</button>}
         <h3 style={{margin:0,fontSize:16,flex:1}}>👥 Manajemen User</h3>
-        <button onClick={()=>{setEditId(null);setForm({username:'',password:'',nama:'',role:'kasir',pin:'',is_active:true});setShowForm(v=>!v);}}
+        <button onClick={()=>{setEditId(null);setForm({email:'',username:'',nama:'',role:'kasir',pin:'',is_active:true});setShowForm(v=>!v);}}
           style={{padding:'8px 16px',background:G,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>+ Tambah</button>
       </div>
 
       {showForm && (
         <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
           <h4 style={{margin:'0 0 12px',fontSize:14}}>{editId?'✏️ Edit':'➕ Tambah'} User</h4>
-          {[['nama','Nama Lengkap *'],['username','Username *'],['password','Password *'],['pin','PIN (4-6 digit)']].map(([k,label])=>(
+          {[['nama','Nama Lengkap *'],['email','Email Login *'],['username','Username (tampilan)'],['pin','PIN (4-6 digit)']].map(([k,label])=>(
             <div key={k} style={{marginBottom:8}}>
               <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
               <input value={form[k]||''} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} placeholder={label}
-                type={k==='password'?'password':'text'}
+                type={k==='email'?'email':'text'}
                 style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
             </div>
           ))}
@@ -9767,11 +9781,11 @@ function PengaturanUser({currentUser, onBack}) {
                 <div style={{fontWeight:700,fontSize:14}}>{u.nama}
                   {u.id===currentUser?.id&&<span style={{fontSize:10,background:G,color:'#fff',borderRadius:4,padding:'1px 6px',marginLeft:4}}>Anda</span>}
                 </div>
-                <div style={{fontSize:12,color:MT,marginTop:2}}>@{u.username} · {u.role==='admin'?'Admin':'Kasir'}</div>
+                <div style={{fontSize:12,color:MT,marginTop:2}}>{u.email||('@'+u.username)} · {u.role==='admin'?'Admin':'Kasir'}</div>
                 <div style={{fontSize:11,color:u.is_active?GD:RD}}>{u.is_active?'✅ Aktif':'❌ Nonaktif'}</div>
               </div>
               <div style={{display:'flex',gap:6}}>
-                <button onClick={()=>{setEditId(u.id);setForm({username:u.username||'',password:u.password||'',nama:u.nama||'',role:u.role||'kasir',pin:u.pin||'',is_active:u.is_active});setShowForm(true);}}
+                <button onClick={()=>{setEditId(u.id);setForm({email:u.email||'',username:u.username||'',nama:u.nama||'',role:u.role||'kasir',pin:u.pin||'',is_active:u.is_active});setShowForm(true);}}
                   style={{padding:'6px 10px',background:GL,border:`1px solid ${G}`,borderRadius:6,cursor:'pointer',fontSize:13,color:GD}}>✏️</button>
                 {u.id!==currentUser?.id&&(
                   <button onClick={()=>toggleActive(u)}
@@ -9818,6 +9832,17 @@ function App() {
   const [currentUser, setCurrentUser] = useState(()=>getSession());
   const [refreshKey, setRefreshKey]   = useState(0);
 
+  // Validasi sesi login: Supabase Auth adalah sumber kebenaran.
+  // Kalau token auth tidak ada/kadaluarsa, profil lokal dianggap tidak sah.
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const { data:{ session } } = await sb.auth.getSession();
+        if(!session && getSession()) { clearSession(); setCurrentUser(null); }
+      } catch(e){}
+    })();
+  },[]);
+
   // Listen for data changes globally
   React.useEffect(()=>{
     const handler = () => setRefreshKey(k=>k+1);
@@ -9851,7 +9876,7 @@ function App() {
   },[]);
 
   const handleLogin = (user) => { setCurrentUser(user); setPage(user.role==='kasir'?'transaksi':'dashboard'); };
-  const handleLogout = () => { clearSession(); setCurrentUser(null); setPage("dashboard"); };
+  const handleLogout = () => { sb.auth.signOut().catch(()=>{}); clearSession(); setCurrentUser(null); setPage("dashboard"); };
 
   // Tampilkan login page kalau belum login
   if(!currentUser) return <LoginPage onLogin={handleLogin}/>;
