@@ -6,7 +6,7 @@
 <title>MyKasir App</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   @media(max-width:699px){
@@ -296,10 +296,10 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
 
         const [prods, txAll, txItems, rets, pos] = await Promise.all([
           sbGetAll('products',{select:'id,stock'}),
-          sbGet('transactions',{order:'created_at',asc:false}),
-          sbGet('transaction_items',{order:'id'}),
-          sbGet('returns',{order:'created_at',asc:false}),
-          sbGet('purchase_orders',{order:'created_at',asc:false}),
+          sbGetAll('transactions',{order:'created_at',asc:false}),
+          sbGetAll('transaction_items',{order:'id'}),
+          sbGetAll('returns',{order:'created_at',asc:false}),
+          sbGetAll('purchase_orders',{order:'created_at',asc:false}),
         ]);
 
         const todayTx      = txAll.filter(t=>t.created_at?.slice(0,10)===today);
@@ -345,7 +345,7 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
         setStats({
           products:     prods.length,
           todayTx:      todayTx.length,
-          todayRevenue: todayTx.filter(t=>t.status==='Lunas').reduce((s,t)=>s+t.total,0) - todayRets.reduce((s,r)=>s+r.total,0),
+          todayRevenue: todayTx.filter(t=>t.status==='Lunas').reduce((s,t)=>s+t.total,0) + todayTx.filter(t=>t.status==='Piutang').reduce((s,t)=>s+(t.paid||0),0) - todayRets.reduce((s,r)=>s+r.total,0),
           lowStock:     prods.filter(p=>p.stock<20).length,
           weekRevenue:  weekTx.reduce((s,t)=>s+t.total,0),
           monthRevenue: monthTx.reduce((s,t)=>s+t.total,0),
@@ -657,15 +657,23 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
 
   const hapusTransaksi = async() => {
     if(!txId) return alert('ID transaksi tidak ditemukan!');
-    if(!confirm('Hapus transaksi ini? Data tidak bisa dikembalikan!')) return;
+    if(!confirm('Hapus transaksi ini?\nStok barang akan dikembalikan otomatis.\nData tidak bisa dikembalikan!')) return;
     setDeleting(true);
     try {
-      // Delete transaction items first
       const sb = window.supabase.createClient(SB_URL, SB_KEY);
+      // Kembalikan stok semua item sebelum dihapus
+      const {data:tItems} = await sb.from('transaction_items').select('*').eq('transaction_id', txId);
+      for(const it of (tItems||[])) {
+        if(it.product_id) await stokMasuk(it.product_id, parseInt(it.qty)||0, `Hapus transaksi ${invoice||('#'+txId)}`);
+      }
+      // Bersihkan catatan piutang & arus kas terkait
+      if(invoice) await sb.from('debts').delete().eq('description', 'Transaksi '+invoice);
+      await sb.from('payments').delete().eq('transaction_id', txId);
+      // Delete transaction items first
       await sb.from('transaction_items').delete().eq('transaction_id', txId);
       await sb.from('transactions').delete().eq('id', txId);
       notifyDataChanged('transaction');
-      alert('✅ Transaksi berhasil dihapus!');
+      alert('✅ Transaksi berhasil dihapus!\nStok sudah dikembalikan.');
       onNew();
     } catch(e){ alert('Gagal hapus: '+e.message); }
     setDeleting(false);
@@ -673,12 +681,21 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
 
   const batalkanTransaksi = async() => {
     if(!txId) return alert('ID transaksi tidak ditemukan!');
-    if(!confirm('Batalkan transaksi ini? Status akan diubah menjadi Batal.')) return;
+    if(!confirm('Batalkan transaksi ini?\nStok barang akan dikembalikan & catatan kas dikoreksi otomatis.')) return;
     setDeleting(true);
     try {
+      const sb = window.supabase.createClient(SB_URL, SB_KEY);
+      // Kembalikan stok semua item
+      const {data:tItems} = await sb.from('transaction_items').select('*').eq('transaction_id', txId);
+      for(const it of (tItems||[])) {
+        if(it.product_id) await stokMasuk(it.product_id, parseInt(it.qty)||0, `Batal transaksi ${invoice||('#'+txId)}`);
+      }
+      // Koreksi buku kas & catatan piutang terkait
+      await sb.from('payments').delete().eq('transaction_id', txId);
+      if(invoice) await sb.from('debts').delete().eq('description', 'Transaksi '+invoice);
       await sbUpdate('transactions', txId, {status:'Batal'});
       notifyDataChanged('transaction');
-      alert('✅ Transaksi berhasil dibatalkan!');
+      alert('✅ Transaksi berhasil dibatalkan!\nStok dikembalikan & kas dikoreksi.');
       onNew();
     } catch(e){ alert('Gagal batalkan: '+e.message); }
     setDeleting(false);
@@ -1170,6 +1187,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
   const [customer, setCustomer] = useState('');
   const [metodeBayar, setMetodeBayar] = useState('Tunai');
   const [statusBayar, setStatusBayar] = useState('Lunas');
+  const [dueDate, setDueDate]         = useState('');
   // Reload customers cache saat komponen mount
   React.useEffect(()=>{
     if(!window._customers||window._customers.length===0){
@@ -1214,7 +1232,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
   const totalPaid   = paidNum + paidNum2;
   const change      = totalPaid - total;
 
-  useEffect(()=>{ if(cart.length===0&&!done){setPaid('');setCustomer('');setMetodeBayar('Tunai');setStatusBayar('Lunas');setDiskon(0);setPajak(0);setDilayaniOleh('');setKeteranganStruk('');setPisahBayar(false);setPaid2('');} },[cart]);
+  useEffect(()=>{ if(cart.length===0&&!done){setPaid('');setCustomer('');setMetodeBayar('Tunai');setStatusBayar('Lunas');setDueDate('');setDiskon(0);setPajak(0);setDilayaniOleh('');setKeteranganStruk('');setPisahBayar(false);setPaid2('');} },[cart]);
 
   const quickAmounts = [...new Set([
     total,
@@ -1236,21 +1254,27 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
       if(outOfStock.length>0) return alert('Stok tidak cukup!\nProduk: '+outOfStock.map(i=>i.name).join(', '));
     }
     if(statusBayar==='Lunas' && (!paid||paidNum<total)) return alert('Nominal bayar kurang!');
+    if(statusBayar==='Piutang' && !customer) return alert('Nama pelanggan wajib diisi untuk piutang!\nPilih pelanggan terdaftar agar piutang bisa ditagih.');
     setSaving(true);
     try {
       const inv = `INV-${Date.now()}`;
+      const dueDefault = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
       const [tx] = await sbInsert('transactions',{
         invoice_no:inv,
         customer:customer||'Umum',
         total,
         paid:statusBayar==='Piutang'?0:paidNum,
         change:statusBayar==='Piutang'?0:Math.max(0,change),
-        status:statusBayar
+        status:statusBayar,
+        metode_bayar:metodeBayar||'Tunai',
+        due_date:statusBayar==='Piutang'?(dueDate||dueDefault):null
       });
       await sbInsert('transaction_items',cart.map(item=>({
         transaction_id:tx.id,product_id:item.id,
         product_name:item.name,price:item.price,qty:item.qty
       })));
+      // Catat arus kas masuk (basis tanggal uang diterima)
+      if(statusBayar==='Lunas') await catatPembayaran({transaction_id:tx.id, amount:total, method:metodeBayar, note:`Penjualan ${inv}`});
       // FIFO: update stok dari batch terlama
       await Promise.all(cart.map(async item=>{
         const pid = item.id||item.product_id;
@@ -1595,9 +1619,14 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
 
         {/* Piutang info */}
         {statusBayar==='Piutang' && (
-          <div style={{padding:'10px 14px',background:'#FFF3E0',borderRadius:10,border:`1px solid ${OR}`,fontSize:12,color:OR,fontWeight:600,textAlign:'center'}}>
-            ⏳ Transaksi akan dicatat sebagai Piutang<br/>
-            <span style={{fontSize:11,fontWeight:400,color:MT}}>Pastikan nama pelanggan diisi</span>
+          <div style={{padding:'10px 14px',background:'#FFF3E0',borderRadius:10,border:`1px solid ${OR}`}}>
+            <div style={{fontSize:12,color:OR,fontWeight:600,textAlign:'center',marginBottom:8}}>⏳ Transaksi akan dicatat sebagai Piutang</div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>📅 Jatuh Tempo</label>
+            <input type="date" value={dueDate||new Date(Date.now()+7*86400000).toISOString().slice(0,10)}
+              min={new Date().toISOString().slice(0,10)}
+              onChange={e=>setDueDate(e.target.value)}
+              style={{width:'100%',padding:'9px 12px',border:`1.5px solid ${OR}`,borderRadius:8,fontSize:13,boxSizing:'border-box',background:'#fff'}}/>
+            <div style={{fontSize:10,color:MT,marginTop:4}}>Reminder otomatis muncul saat mendekati jatuh tempo</div>
           </div>
         )}
 
@@ -2112,7 +2141,10 @@ function Transaksi() {
                     {CAT_ICONS[sub]||'📦'}
                   </div>
                   {/* Info — klik untuk tambah */}
-                  <div style={{flex:1,minWidth:0}} onClick={()=>addToCart(p)}>
+                  <div style={{flex:1,minWidth:0}} onClick={()=>{
+                      if(p.stock<=0&&!bypassStok) return alert('Stok habis! Aktifkan bypass stok di panel kanan untuk tetap menjual.');
+                      addToCart(p);
+                    }}>
                     <div style={{fontSize:13,fontWeight:700,color:TX,lineHeight:1.3}}>{p.name}</div>
                     <div style={{fontSize:12,marginTop:2}}>
                       <span style={{color:MT}}>sisa {p.stock} · </span>
@@ -2123,12 +2155,18 @@ function Transaksi() {
                   {/* Qty Control */}
                   <div style={{flexShrink:0}}>
                     {qty===0
-                      ? <button onClick={()=>addToCart(p)}
-                          style={{width:34,height:34,borderRadius:'50%',background:G,border:'none',color:'#fff',fontSize:22,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,boxShadow:'0 2px 6px rgba(46,204,113,0.35)'}}>+</button>
+                      ? <button onClick={()=>{
+                            if(p.stock<=0&&!bypassStok) return alert('Stok habis!');
+                            addToCart(p);
+                          }}
+                          style={{width:34,height:34,borderRadius:'50%',background:p.stock<=0&&!bypassStok?MT:G,border:'none',color:'#fff',fontSize:22,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,boxShadow:'0 2px 6px rgba(46,204,113,0.35)'}}>+</button>
                       : <div style={{display:'flex',alignItems:'center',gap:5}}>
                           <button onClick={()=>updateQty((cart.find(i=>i.id===p.id)?.cartKey||p.id+'_Pcs'),-1)} style={{width:28,height:28,borderRadius:'50%',background:'#fff',border:`2px solid ${G}`,color:G,fontSize:16,cursor:'pointer',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>−</button>
                           <span style={{minWidth:22,textAlign:'center',fontWeight:800,fontSize:14,color:TX}}>{qty}</span>
-                          <button onClick={()=>addToCart(p)} style={{width:28,height:28,borderRadius:'50%',background:G,border:'none',color:'#fff',fontSize:16,cursor:'pointer',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>+</button>
+                          <button onClick={()=>{
+                              if(p.stock<=0&&!bypassStok) return;
+                              addToCart(p);
+                            }} style={{width:28,height:28,borderRadius:'50%',background:G,border:'none',color:'#fff',fontSize:16,cursor:'pointer',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>+</button>
                         </div>
                     }
                   </div>
@@ -3118,10 +3156,10 @@ function HutangPiutang() {
     setLoading(true);
     try {
       const [txs, dbs, custs, pos] = await Promise.all([
-        sbGet('transactions',{order:'created_at',asc:false}),
-        sbGet('debts',{order:'created_at',asc:false}),
+        sbGetAll('transactions',{order:'created_at',asc:false}),
+        sbGetAll('debts',{order:'created_at',asc:false}),
         sbGet('customers',{order:'name'}),
-        sbGet('purchase_orders',{order:'created_at',asc:false}),
+        sbGetAll('purchase_orders',{order:'created_at',asc:false}),
       ]);
       setTrans(txs||[]);
       setDebts(dbs||[]);
@@ -3193,7 +3231,9 @@ function HutangPiutang() {
     if(!confirm(`Lunasi SEMUA piutang ${customer.name}?\nTotal: ${fmt(customer.sisa)}`)) return;
     try {
       for(const tx of customer.txList.filter(t=>t.status==='Piutang')) {
+        const sisaTx = tx.total-(tx.paid||0);
         await sbUpdate('transactions',tx.id,{status:'Lunas',paid:tx.total,change:0});
+        await catatPembayaran({transaction_id:tx.id, amount:sisaTx, note:`Pelunasan piutang ${tx.invoice_no||('#'+tx.id)}`});
       }
       notifyDataChanged('piutang');
       load();
@@ -3225,6 +3265,7 @@ function HutangPiutang() {
       const newPaid  = (tx.paid||0)+jumlah;
       const newStatus = newPaid>=tx.total?'Lunas':'Piutang';
       await sbUpdate('transactions',tx.id,{paid:newPaid,status:newStatus,change:Math.max(0,newPaid-tx.total)});
+      await catatPembayaran({transaction_id:tx.id, amount:jumlah, note:`Pembayaran piutang ${tx.invoice_no||('#'+tx.id)}`});
       notifyDataChanged('piutang');
       setBayarInput('');
       load();
@@ -3674,7 +3715,7 @@ function ManajemenRetur() {
     setLoading(true);
     try {
       const [rets, prods, sups] = await Promise.all([
-        sbGet('returns',{order:'created_at',asc:false}),
+        sbGetAll('returns',{order:'created_at',asc:false}),
         sbGetAll('products',{order:'name'}),
         sbGet('suppliers',{order:'name'}),
       ]);
@@ -4015,8 +4056,8 @@ function Keuangan({refreshKey}) {
     setLoading(true);
     try {
       const [txs, rets] = await Promise.all([
-        sbGet('transactions',{order:'created_at',asc:false}),
-        sbGet('returns',{order:'created_at',asc:false}),
+        sbGetAll('transactions',{order:'created_at',asc:false}),
+        sbGetAll('returns',{order:'created_at',asc:false}),
       ]);
       setTxList(txs||[]);
       setReturns(rets||[]);
@@ -4027,16 +4068,17 @@ function Keuangan({refreshKey}) {
 
   const today    = new Date().toISOString().slice(0,10);
   const todayTx  = txList.filter(t=>t.created_at?.slice(0,10)===today&&t.status==='Lunas');
+  const todayDP  = txList.filter(t=>t.created_at?.slice(0,10)===today&&t.status==='Piutang').reduce((s,t)=>s+(t.paid||0),0);
   const todayRet = returns.filter(r=>r.created_at?.slice(0,10)===today&&r.type==='dari_pelanggan');
 
   // Pendapatan hari ini = omset lunas - retur hari ini
-  const pendapatanHariIni = todayTx.reduce((s,t)=>s+t.total,0) - todayRet.reduce((s,r)=>s+r.total,0);
+  const pendapatanHariIni = todayTx.reduce((s,t)=>s+t.total,0) + todayDP - todayRet.reduce((s,r)=>s+r.total,0);
 
   // Total keseluruhan
   const totalOmset   = txList.filter(t=>t.status==='Lunas').reduce((s,t)=>s+t.total,0);
   const totalRetur   = returns.filter(r=>r.type==='dari_pelanggan').reduce((s,r)=>s+r.total,0);
   const totalNeto    = totalOmset - totalRetur;
-  const totalPiutang = txList.filter(t=>t.status==='Piutang').reduce((s,t)=>s+t.total,0);
+  const totalPiutang = txList.filter(t=>t.status==='Piutang').reduce((s,t)=>s+(t.total-(t.paid||0)),0);
 
   // Filter list
   const filteredTx = txList.filter(t=>{
@@ -4157,8 +4199,8 @@ function LaporanPenjualanBarang({period}) {
         const sinceStr = since.toISOString();
 
         const [txs, items] = await Promise.all([
-          sbGet('transactions',{order:'created_at'}),
-          sbGet('transaction_items',{order:'id'}),
+          sbGetAll('transactions',{order:'created_at'}),
+          sbGetAll('transaction_items',{order:'id'}),
         ]);
 
         const validTxIds = new Set(
@@ -4256,8 +4298,8 @@ function LaporanPenjualanKategori({period}) {
         const sinceStr = since.toISOString();
 
         const [txs, items, prods] = await Promise.all([
-          sbGet('transactions',{order:'created_at'}),
-          sbGet('transaction_items',{order:'id'}),
+          sbGetAll('transactions',{order:'created_at'}),
+          sbGetAll('transaction_items',{order:'id'}),
           sbGetAll('products',{select:'id,name,category',order:'name'}),
         ]);
 
@@ -4335,7 +4377,7 @@ function LaporanMetodePembayaran({period}) {
         since.setDate(since.getDate()-days);
         const sinceStr = since.toISOString();
 
-        const txs = await sbGet('transactions',{order:'created_at'});
+        const txs = await sbGetAll('transactions',{order:'created_at'});
         const filtered = txs.filter(t=>t.created_at>=sinceStr&&t.status==='Lunas');
 
         const map = {};
@@ -4420,7 +4462,7 @@ function LaporanArusStok({period}) {
         since.setDate(since.getDate()-days);
         const sinceStr = since.toISOString();
 
-        const all = await sbGet('stock_logs',{order:'created_at',asc:false});
+        const all = await sbGetAll('stock_logs',{order:'created_at',asc:false});
         setLogs(all.filter(l=>l.created_at>=sinceStr));
       } catch(e){}
       setLoading(false);
@@ -4495,7 +4537,7 @@ function ReturHistory({period}) {
         const since = new Date();
         since.setDate(since.getDate()-days);
         const sinceStr = since.toISOString();
-        const all = await sbGet('returns',{order:'created_at',asc:false});
+        const all = await sbGetAll('returns',{order:'created_at',asc:false});
         setReturns(all.filter(r=>r.created_at>=sinceStr));
       } catch(e){}
       setLoading(false);
@@ -4621,7 +4663,7 @@ function EditItemRow({item, products, onSelect, onQtyChange, onPriceChange, onRe
   );
 }
 
-function LaporanPenjualan() {
+function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
   const today = new Date().toISOString().slice(0,10);
   const [filter, setFilter]         = useState({dari: today, sampai: today, status:'', search:''});
   const [transactions, setTrans]    = useState([]);
@@ -4636,6 +4678,25 @@ function LaporanPenjualan() {
   const [saving, setSaving]         = useState(false);
   const [showReturForm, setShowReturForm] = useState(false);
   const [showStruk, setShowStruk]   = useState(false);
+  const [payModal, setPayModal]     = useState(null); // opsi bayar saat total edit > dibayar
+
+  // Deep-link: buka langsung detail invoice dari laporan lain
+  useEffect(()=>{
+    if(!initialTxId) return;
+    (async()=>{
+      try {
+        const r = await sbGet('transactions',{eq:{id:initialTxId}});
+        const tx = r?.[0];
+        if(tx){
+          const tgl = tx.created_at?.slice(0,10)||today;
+          setFilter(f=>({...f, dari:tgl, sampai:tgl}));
+          setTrans([tx]);
+          openDetail(tx);
+        }
+      } catch(e){}
+      onConsumeTarget&&onConsumeTarget();
+    })();
+  },[initialTxId]);
 
   const loadProducts = async() => {
     if(products.length>0) return;
@@ -4646,7 +4707,7 @@ function LaporanPenjualan() {
     if(!filter.dari||!filter.sampai) return alert('Pilih tanggal terlebih dahulu!');
     setLoading(true); setSelected(null); setEditMode(false);
     try {
-      const all = await sbGet('transactions',{order:'created_at',asc:false});
+      const all = await sbGetAll('transactions',{order:'created_at',asc:false});
       const filtered = all.filter(t=>{
         const tgl = t.created_at?.slice(0,10);
         if(tgl < filter.dari || tgl > filter.sampai) return false;
@@ -4694,16 +4755,35 @@ function LaporanPenjualan() {
 
   const saveEdit = async() => {
     if(editItems.some(i=>!i.product_name||!i.qty||!i.price)) return alert('Lengkapi semua item!');
+    const paidNow = parseInt(editForm.paid)||0;
+    // ── Kurang bayar? Tanya dulu: bayar sekarang atau jadikan piutang ──
+    if(paidNow < editTotal) {
+      const defDue = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+      setPayModal({
+        kekurangan: editTotal - paidNow,
+        tambahan:   String(editTotal - paidNow),
+        dueDate:    selected.due_date || defDue,
+      });
+      return;
+    }
+    // ── Dibayar cukup → Lunas, kembalian dihitung normal (tidak pernah minus) ──
+    doSaveEdit({ status:'Lunas', paid:paidNow, change:paidNow-editTotal, due_date:null });
+  };
+
+  const doSaveEdit = async({status, paid, change, due_date, bayarMasuk=0}) => {
     setSaving(true);
     try {
       // Update transaksi
       await sbUpdate('transactions', selected.id, {
         customer: editForm.customer,
-        status: editForm.status,
+        status,
         total: editTotal,
-        paid: parseInt(editForm.paid)||editTotal,
-        change: (parseInt(editForm.paid)||editTotal) - editTotal,
+        paid,
+        change,
+        due_date,
       });
+      // Catat kas masuk kalau ada pembayaran tambahan diterima saat revisi
+      if(bayarMasuk>0) await catatPembayaran({transaction_id:selected.id, amount:bayarMasuk, note:`Pembayaran revisi ${selected.invoice_no||('#'+selected.id)}`});
 
       // Hapus items lama & insert baru
       // Supabase: delete where transaction_id
@@ -4718,16 +4798,29 @@ function LaporanPenjualan() {
         subtotal: parseInt(i.qty)*parseInt(i.price),
       })));
 
+      // ── Sesuaikan stok sesuai perubahan item ──
+      const keyOf = it=>it.product_id?('p'+it.product_id):null;
+      const oldQty={}, newQty={}, metaP={};
+      txItems.forEach(it=>{const k=keyOf(it); if(k){oldQty[k]=(oldQty[k]||0)+(parseInt(it.qty)||0); metaP[k]=it;}});
+      editItems.forEach(it=>{const k=keyOf(it); if(k){newQty[k]=(newQty[k]||0)+(parseInt(it.qty)||0); metaP[k]=it;}});
+      for(const k of Object.keys({...oldQty,...newQty})){
+        const d=(newQty[k]||0)-(oldQty[k]||0);
+        if(d>0)      await stokKeluar(metaP[k].product_id, d,  `Revisi ${selected.invoice_no||('#'+selected.id)}`);
+        else if(d<0) await stokMasuk(metaP[k].product_id, -d, `Revisi ${selected.invoice_no||('#'+selected.id)}`);
+      }
+
       // Refresh - update semua state dengan data terbaru
       const updatedTx = {
         ...selected,
         customer: editForm.customer,
-        status:   editForm.status,
+        status,
         total:    editTotal,
-        paid:     parseInt(editForm.paid)||editTotal,
-        change:   (parseInt(editForm.paid)||editTotal) - editTotal,
+        paid,
+        change,
+        due_date,
       };
       setSelected(updatedTx);
+      setEditForm(f=>({...f, status, paid}));
       setTxItems(editItems.map(i=>({
         ...i,
         qty:   parseInt(i.qty),
@@ -4735,10 +4828,14 @@ function LaporanPenjualan() {
         subtotal: parseInt(i.qty)*parseInt(i.price),
       })));
       setEditMode(false);
+      setPayModal(null);
       setTrans(prev=>prev.map(t=>t.id===selected.id?updatedTx:t));
       // Tawarkan cetak ulang
       notifyDataChanged('transaction');
-      if(window.confirm('✅ Transaksi berhasil diupdate!\n\nCetak ulang faktur terbaru?')) {
+      const msg = status==='Piutang'
+        ? `✅ Transaksi diupdate & dicatat sebagai PIUTANG.\nUang muka: ${fmt(paid)}\nSisa tagihan: ${fmt(editTotal-paid)}\nJatuh tempo: ${due_date||'-'}\n\nCetak ulang faktur terbaru?`
+        : `✅ Transaksi berhasil diupdate (LUNAS).${change>0?`\nKembalian: ${fmt(change)}`:''}\n\nCetak ulang faktur terbaru?`;
+      if(window.confirm(msg)) {
         setShowStruk(true);
       }
     } catch(e){ alert('Gagal: '+e.message); }
@@ -4746,7 +4843,7 @@ function LaporanPenjualan() {
   };
 
   const totalOmset = transactions.filter(t=>t.status==='Lunas').reduce((s,t)=>s+t.total,0);
-  const totalPiutang = transactions.filter(t=>t.status==='Piutang').reduce((s,t)=>s+t.total,0);
+  const totalPiutang = transactions.filter(t=>t.status==='Piutang').reduce((s,t)=>s+(t.total-(t.paid||0)),0);
 
   return (
     <div style={{padding:16,maxWidth:1100,margin:'0 auto'}}>
@@ -5151,6 +5248,90 @@ function LaporanPenjualan() {
         </div>
       )}
 
+      {/* Modal opsi pembayaran: total edit melebihi yang sudah dibayar */}
+      {payModal&&selected&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget)setPayModal(null);}}>
+          <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:430,boxShadow:'0 8px 30px rgba(0,0,0,0.3)',maxHeight:'90vh',overflowY:'auto'}}>
+            <div style={{fontWeight:800,fontSize:16,marginBottom:2}}>💳 Total Transaksi Berubah</div>
+            <div style={{fontSize:12,color:MT,marginBottom:14}}>Pembayaran sebelumnya belum menutupi total baru. Pilih tindakan:</div>
+
+            {/* Ringkasan */}
+            <div style={{background:'#FFF3E0',border:`1.5px solid ${OR}`,borderRadius:10,padding:'10px 14px',marginBottom:16}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:4}}>
+                <span style={{color:MT}}>Total baru</span><span style={{fontWeight:700}}>{fmt(editTotal)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:4}}>
+                <span style={{color:MT}}>Sudah dibayar</span><span style={{fontWeight:700}}>{fmt(parseInt(editForm.paid)||0)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:14,paddingTop:6,borderTop:`1px solid ${OR}`}}>
+                <span style={{fontWeight:700,color:OR}}>Kekurangan</span>
+                <span style={{fontWeight:800,fontSize:16,color:OR}}>{fmt(payModal.kekurangan)}</span>
+              </div>
+            </div>
+
+            {/* Opsi 1: Bayar sekarang */}
+            <div style={{border:`1.5px solid ${G}`,borderRadius:12,padding:14,marginBottom:12,background:GL}}>
+              <div style={{fontWeight:700,fontSize:13,color:GD,marginBottom:8}}>💵 Konsumen Bayar Sekarang</div>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Jumlah pembayaran tambahan</label>
+              <input type="number" value={payModal.tambahan}
+                onChange={e=>setPayModal(m=>({...m,tambahan:e.target.value}))}
+                style={{width:'100%',padding:'10px 12px',border:`1.5px solid ${G}`,borderRadius:8,fontSize:15,fontWeight:700,boxSizing:'border-box',marginBottom:8}}/>
+              {(parseInt(payModal.tambahan)||0)>0&&(parseInt(editForm.paid)||0)+(parseInt(payModal.tambahan)||0)<editTotal&&(
+                <div style={{fontSize:11,color:OR,fontWeight:600,marginBottom:8}}>
+                  ⚠️ Masih kurang {fmt(editTotal-(parseInt(editForm.paid)||0)-(parseInt(payModal.tambahan)||0))} — sisanya otomatis jadi piutang
+                </div>
+              )}
+              {(parseInt(editForm.paid)||0)+(parseInt(payModal.tambahan)||0)>editTotal&&(
+                <div style={{fontSize:11,color:GD,fontWeight:600,marginBottom:8}}>
+                  💰 Kembalian: {fmt((parseInt(editForm.paid)||0)+(parseInt(payModal.tambahan)||0)-editTotal)}
+                </div>
+              )}
+              <button disabled={saving} onClick={()=>{
+                const tmb = parseInt(payModal.tambahan)||0;
+                if(tmb<=0) return alert('Masukkan jumlah pembayaran!');
+                const newPaid = (parseInt(editForm.paid)||0)+tmb;
+                if(newPaid>=editTotal){
+                  // Uang masuk riil = kekurangan saja (kelebihan jadi kembalian)
+                  doSaveEdit({status:'Lunas',paid:newPaid,change:newPaid-editTotal,due_date:null,bayarMasuk:payModal.kekurangan});
+                }else{
+                  doSaveEdit({status:'Piutang',paid:newPaid,change:0,due_date:payModal.dueDate,bayarMasuk:tmb});
+                }
+              }}
+                style={{width:'100%',padding:12,background:saving?MT:G,color:'#fff',border:'none',borderRadius:10,fontWeight:800,fontSize:14,cursor:'pointer'}}>
+                {saving?'⏳ Menyimpan...':'✅ Terima Pembayaran'}
+              </button>
+            </div>
+
+            <div style={{textAlign:'center',fontSize:11,color:MT,fontWeight:600,marginBottom:12}}>── atau ──</div>
+
+            {/* Opsi 2: Jadikan piutang */}
+            <div style={{border:`1.5px solid ${OR}`,borderRadius:12,padding:14,marginBottom:12,background:'#FFF8F0'}}>
+              <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:8}}>📋 Jadikan Piutang</div>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Jatuh tempo</label>
+              <input type="date" value={payModal.dueDate}
+                onChange={e=>setPayModal(m=>({...m,dueDate:e.target.value}))}
+                style={{width:'100%',padding:'10px 12px',border:`1.5px solid ${OR}`,borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:8}}/>
+              <div style={{fontSize:11,color:MT,marginBottom:8}}>
+                Sisa {fmt(payModal.kekurangan)} dicatat sebagai piutang a/n <b>{editForm.customer||'Umum'}</b>. Pelunasan lewat menu Kredit/Piutang.
+              </div>
+              <button disabled={saving} onClick={()=>{
+                if(!payModal.dueDate) return alert('Pilih tanggal jatuh tempo!');
+                doSaveEdit({status:'Piutang',paid:parseInt(editForm.paid)||0,change:0,due_date:payModal.dueDate});
+              }}
+                style={{width:'100%',padding:12,background:saving?MT:OR,color:'#fff',border:'none',borderRadius:10,fontWeight:800,fontSize:14,cursor:'pointer'}}>
+                {saving?'⏳ Menyimpan...':'📋 Simpan sebagai Piutang'}
+              </button>
+            </div>
+
+            <button onClick={()=>setPayModal(null)} disabled={saving}
+              style={{width:'100%',padding:11,background:'#eee',border:'none',borderRadius:10,fontWeight:700,fontSize:13,cursor:'pointer',color:TX}}>
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Struk cetak ulang */}
       {showStruk&&selected&&(
         <StrukSukses
@@ -5211,16 +5392,23 @@ function ReturInlineForm({transaction, txItems, onDone}) {
           price:selectedItems[i.id]?.price||i.price,
           reason,
         })));
+        // Kembalikan stok — barang rusak/cacat tidak masuk stok jual
+        const layakJual = !/rusak|cacat/i.test(reason);
         for(const item of items){
-          if(item.product_id){
+          if(!item.product_id) continue;
+          const qtyR = selectedItems[item.id]?.qty||item.qty;
+          if(layakJual) {
+            await stokMasuk(item.product_id, qtyR, `Retur dari ${transaction.invoice_no}`);
+          } else {
             await sbInsert('stock_logs',[{
-              product_id:item.product_id, type:'masuk',
-              qty:selectedItems[item.id]?.qty||item.qty,
-              notes:`Retur dari ${transaction.invoice_no}`,
-            }]);
+              product_id:item.product_id, type:'masuk', qty:0,
+              notes:`Retur ${qtyR} pcs (${reason} — tidak masuk stok jual) dari ${transaction.invoice_no}`,
+            }]).catch(()=>{});
           }
         }
       }
+      // Catat kas keluar kalau refund uang ke pelanggan
+      if(action==='refund') await catatPembayaran({transaction_id:transaction.id, type:'keluar', amount:total, note:`Refund retur ${no} (${transaction.invoice_no})`});
       setReturnNo(no); setDone(true);
     } catch(e){ alert('Gagal: '+e.message); }
     setSaving(false);
@@ -5345,16 +5533,23 @@ function ReturFromInvoice() {
           product_name:i.product_name, qty:selectedItems[i.id]?.qty||i.qty,
           price:selectedItems[i.id]?.price||i.price, reason,
         })));
+        // Kembalikan stok — barang rusak/cacat tidak masuk stok jual
+        const layakJual = !/rusak|cacat/i.test(reason);
         for(const item of returItems) {
-          if(item.product_id) {
+          if(!item.product_id) continue;
+          const qtyR = selectedItems[item.id]?.qty||item.qty;
+          if(layakJual) {
+            await stokMasuk(item.product_id, qtyR, `Retur dari ${invoiceNo}`);
+          } else {
             await sbInsert('stock_logs',[{
-              product_id:item.product_id, type:'masuk',
-              qty:selectedItems[item.id]?.qty||item.qty,
-              notes:`Retur dari ${invoiceNo}`,
-            }]);
+              product_id:item.product_id, type:'masuk', qty:0,
+              notes:`Retur ${qtyR} pcs (${reason} — tidak masuk stok jual) dari ${invoiceNo}`,
+            }]).catch(()=>{});
           }
         }
       }
+      // Catat kas keluar kalau refund uang ke pelanggan
+      if(action==='refund') await catatPembayaran({transaction_id:transaction.id, type:'keluar', amount:totalRetur, note:`Refund retur ${returnNo} (${invoiceNo})`});
       notifyDataChanged('retur');
       setSuccess(returnNo);
       setTransaction(null); setTxItems([]); setInvoiceNo('');
@@ -5465,15 +5660,15 @@ function LaporanLabaRugi({period}) {
         const sinceStr = since.toISOString();
 
         const [txs, items, prods] = await Promise.all([
-          sbGet('transactions',{order:'created_at'}),
-          sbGet('transaction_items',{order:'id'}),
+          sbGetAll('transactions',{order:'created_at'}),
+          sbGetAll('transaction_items',{order:'id'}),
           sbGetAll('products',{select:'id,name,buy_price,price',order:'name'}),
         ]);
 
         const prodMap = {};
         prods.forEach(p=>{ prodMap[p.name]={buy_price:p.buy_price||0, price:p.price||0}; });
 
-        const validTxs = txs.filter(t=>t.created_at>=sinceStr&&t.status==='Lunas');
+        const validTxs = txs.filter(t=>t.created_at>=sinceStr&&(t.status==='Lunas'||t.status==='Piutang'));
         const validTxIds = new Set(validTxs.map(t=>t.id));
         const filteredItems = items.filter(i=>validTxIds.has(i.transaction_id));
 
@@ -5656,10 +5851,10 @@ function RingkasanPenjualan({period, onBack}) {
       else if(periode==='custom')   { dari=customFrom; sampai=customTo; }
 
       const [txs, items, prods, yestTxs] = await Promise.all([
-        sbGet('transactions',{order:'created_at',asc:false}),
-        sbGet('transaction_items',{order:'id'}),
+        sbGetAll('transactions',{order:'created_at',asc:false}),
+        sbGetAll('transaction_items',{order:'id'}),
         sbGetAll('products',{select:'id,stock,buy_price',order:'id'}),
-        sbGet('transactions',{order:'created_at',asc:false}),
+        sbGetAll('transactions',{order:'created_at',asc:false}),
       ]);
 
       const filterTx = (txList, d1, d2) => txList.filter(t=>{
@@ -5825,10 +6020,11 @@ function RingkasanPenjualan({period, onBack}) {
 }
 
 // ── LAPORAN LABA RUGI DETAIL ───────────────────────────────────────────────
-function LaporanLabaRugiDetail({onBack}) {
+function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
   const [periode, setPeriode] = useState('bulan');
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
+  const [openDay, setOpenDay] = useState(null);
   const [showBeforePiutang, setShowBeforePiutang] = useState(false);
 
   const today = new Date().toISOString().slice(0,10);
@@ -5844,8 +6040,8 @@ function LaporanLabaRugiDetail({onBack}) {
       }
 
       const [txs, items, prods] = await Promise.all([
-        sbGet('transactions',{order:'created_at',asc:false}),
-        sbGet('transaction_items',{order:'id'}),
+        sbGetAll('transactions',{order:'created_at',asc:false}),
+        sbGetAll('transaction_items',{order:'id'}),
         sbGetAll('products',{select:'id,buy_price',order:'id'}),
       ]);
 
@@ -5870,15 +6066,21 @@ function LaporanLabaRugiDetail({onBack}) {
       const hariMap = {};
       txPeriode.forEach(t=>{
         const tgl = t.created_at?.slice(0,10);
-        if(!hariMap[tgl]) hariMap[tgl]={date:tgl,omset:0,hpp:0,tx:0};
+        if(!hariMap[tgl]) hariMap[tgl]={date:tgl,omset:0,hpp:0,tx:0,txList:[]};
         if(t.status==='Lunas') hariMap[tgl].omset+=t.total;
         hariMap[tgl].tx++;
+        hariMap[tgl].txList.push({id:t.id,invoice:t.invoice_no||('#'+t.id),customer:t.customer||'Umum',total:t.total,status:t.status,hpp:0});
       });
       filteredItems.forEach(i=>{
         const tx = txPeriode.find(t=>t.id===i.transaction_id);
         if(tx) {
           const tgl = tx.created_at?.slice(0,10);
-          if(hariMap[tgl]) hariMap[tgl].hpp+=(prodMap[i.product_id]||0)*i.qty;
+          if(hariMap[tgl]) {
+            const h = (prodMap[i.product_id]||0)*i.qty;
+            hariMap[tgl].hpp += h;
+            const row = hariMap[tgl].txList.find(x=>x.id===i.transaction_id);
+            if(row) row.hpp += h;
+          }
         }
       });
 
@@ -5947,23 +6149,47 @@ function LaporanLabaRugiDetail({onBack}) {
           <div style={{fontSize:11,color:MT,marginBottom:10}}>*tekan untuk melihat lebih detail</div>
 
           {/* Per hari */}
-          {data.perHari.map((d,i)=>(
-            <div key={i} style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:8,boxShadow:'0 1px 4px rgba(0,0,0,0.07)',display:'flex',gap:14,alignItems:'flex-start'}}>
-              <div style={{textAlign:'center',flexShrink:0,minWidth:36}}>
-                <div style={{fontWeight:900,fontSize:22,lineHeight:1,color:TX}}>{d.date.slice(8)}</div>
-                <div style={{fontSize:10,color:MT}}>{new Date(d.date).toLocaleDateString('id-ID',{month:'short'})}</div>
-                <div style={{fontSize:10,color:MT}}>{d.date.slice(0,4)}</div>
+          {data.perHari.map((d,i)=>{
+            const isOpen = openDay===d.date;
+            return (
+            <div key={i} onClick={()=>setOpenDay(isOpen?null:d.date)}
+              style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:8,boxShadow:isOpen?'0 2px 10px rgba(0,0,0,0.12)':'0 1px 4px rgba(0,0,0,0.07)',cursor:'pointer',border:isOpen?`1.5px solid ${G}`:'1.5px solid transparent'}}>
+              <div style={{display:'flex',gap:14,alignItems:'flex-start'}}>
+                <div style={{textAlign:'center',flexShrink:0,minWidth:36}}>
+                  <div style={{fontWeight:900,fontSize:22,lineHeight:1,color:TX}}>{d.date.slice(8)}</div>
+                  <div style={{fontSize:10,color:MT}}>{new Date(d.date).toLocaleDateString('id-ID',{month:'short'})}</div>
+                  <div style={{fontSize:10,color:MT}}>{d.date.slice(0,4)}</div>
+                </div>
+                <div style={{flex:1,display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,fontSize:11}}>
+                  <div><div style={{color:MT}}>Transaksi</div><div style={{fontWeight:700,color:G}}>{fmt(d.omset)}</div></div>
+                  <div><div style={{color:MT}}>Pembelian (HPP)</div><div style={{fontWeight:700,color:RD}}>{fmt(d.hpp)}</div></div>
+                  <div><div style={{color:MT}}>Laba Hari Ini</div><div style={{fontWeight:700,color:(d.omset-d.hpp)>=0?G:RD}}>{fmt(d.omset-d.hpp)}</div></div>
+                  <div style={{alignSelf:'end'}}><span style={{color:MT}}>{d.tx} Transaksi</span></div>
+                </div>
+                <div style={{color:G,fontSize:18,flexShrink:0,transform:isOpen?'rotate(90deg)':'none',transition:'transform 0.15s'}}>›</div>
               </div>
-              <div style={{flex:1,display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,fontSize:11}}>
-                <div><div style={{color:MT}}>Transaksi</div><div style={{fontWeight:700,color:G}}>{fmt(d.omset)}</div></div>
-                <div><div style={{color:MT}}>Pembelian (HPP)</div><div style={{fontWeight:700,color:RD}}>{fmt(d.hpp)}</div></div>
-                <div><div style={{color:MT}}>Pemasukan Lain</div><div style={{fontWeight:600}}>Rp 0</div></div>
-                <div><div style={{color:MT}}>Pengeluaran Lain</div><div style={{fontWeight:600}}>Rp 0</div></div>
-                <div style={{gridColumn:'span 2'}}><span style={{color:MT}}>{d.tx} Transaksi</span></div>
-              </div>
-              <div style={{color:G,fontSize:18,flexShrink:0}}>›</div>
+              {isOpen&&(
+                <div style={{marginTop:10,paddingTop:10,borderTop:'1px dashed #ddd'}} onClick={e=>e.stopPropagation()}>
+                  <div style={{fontSize:11,fontWeight:700,color:MT,marginBottom:6}}>📋 RINCIAN TRANSAKSI</div>
+                  {(d.txList||[]).map((t,j)=>(
+                    <div key={j} onClick={()=>onOpenInvoice&&onOpenInvoice(t.id)}
+                      style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 10px',background:'#F5F6FA',borderRadius:8,marginBottom:4,cursor:onOpenInvoice?'pointer':'default'}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:11,fontWeight:700,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.invoice}</div>
+                        <div style={{fontSize:10,color:MT}}>{t.customer} · <span style={{color:t.status==='Lunas'?GD:OR,fontWeight:600}}>{t.status}</span></div>
+                      </div>
+                      <div style={{textAlign:'right',flexShrink:0,marginLeft:8}}>
+                        <div style={{fontSize:11,fontWeight:700}}>{fmt(t.total)}</div>
+                        <div style={{fontSize:10,color:(t.total-t.hpp)>=0?GD:RD,fontWeight:600}}>laba {fmt(t.total-t.hpp)}</div>
+                      </div>
+                      {onOpenInvoice&&<div style={{color:G,fontSize:14,marginLeft:6,flexShrink:0}}>›</div>}
+                    </div>
+                  ))}
+                  {(d.txList||[]).length===0&&<div style={{fontSize:11,color:MT,textAlign:'center',padding:8}}>Tidak ada transaksi</div>}
+                </div>
+              )}
             </div>
-          ))}
+          );})}
         </>
       )}
     </div>
@@ -5971,10 +6197,11 @@ function LaporanLabaRugiDetail({onBack}) {
 }
 
 // ── ARUS KEUANGAN DETAIL ───────────────────────────────────────────────────
-function ArusKeuanganDetail({onBack}) {
+function ArusKeuanganDetail({onBack, onOpenInvoice}) {
   const [periode, setPeriode] = useState('bulan');
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
+  const [openDay, setOpenDay] = useState(null);
 
   const today = new Date().toISOString().slice(0,10);
 
@@ -5988,10 +6215,11 @@ function ArusKeuanganDetail({onBack}) {
         sampai = today;
       }
 
-      const [txs, pos, debts] = await Promise.all([
-        sbGet('transactions',{order:'created_at',asc:false}),
-        sbGet('purchase_orders',{order:'created_at',asc:false}),
-        sbGet('debts',{order:'created_at',asc:false}),
+      const [txs, pos, debts, pays] = await Promise.all([
+        sbGetAll('transactions',{order:'created_at',asc:false}),
+        sbGetAll('purchase_orders',{order:'created_at',asc:false}),
+        sbGetAll('debts',{order:'created_at',asc:false}),
+        sbGetAll('payments',{order:'created_at',asc:false}).catch(()=>null),
       ]);
 
       const filterDate = (list, d1, d2) => list.filter(t=>t.created_at?.slice(0,10)>=d1&&t.created_at?.slice(0,10)<=d2);
@@ -6000,21 +6228,53 @@ function ArusKeuanganDetail({onBack}) {
       const poPeriode  = filterDate(pos,dari,sampai).filter(p=>p.bayar==='Lunas');
       const debtPeriode= filterDate(debts,dari,sampai).filter(d=>d.type==='hutang');
 
-      const totalPemasukan  = txPeriode.reduce((s,t)=>s+t.total,0);
-      const totalPengeluaran = poPeriode.reduce((s,p)=>s+p.total,0) + debtPeriode.filter(d=>d.status==='Lunas').reduce((s,d)=>s+d.amount,0);
+      // ── Basis pembayaran (akurat): pakai tabel payments kalau tersedia ──
+      const payBased = Array.isArray(pays)&&pays.length>0;
+      let totalPemasukan, refundKeluar = 0, paysPeriode = [];
+      if(payBased){
+        paysPeriode    = filterDate(pays,dari,sampai);
+        totalPemasukan = paysPeriode.filter(p=>p.type==='masuk').reduce((s,p)=>s+(p.amount||0),0);
+        refundKeluar   = paysPeriode.filter(p=>p.type==='keluar').reduce((s,p)=>s+(p.amount||0),0);
+      } else {
+        // Fallback lama: basis status transaksi (kurang akurat untuk piutang/cicilan)
+        totalPemasukan = txPeriode.reduce((s,t)=>s+t.total,0);
+      }
+      const totalPengeluaran = poPeriode.reduce((s,p)=>s+p.total,0) + debtPeriode.filter(d=>d.status==='Lunas').reduce((s,d)=>s+d.amount,0) + refundKeluar;
       const neto = totalPemasukan - totalPengeluaran;
 
-      // Per hari
+      // Per hari (dengan rincian per item)
       const hariMap = {};
-      txPeriode.forEach(t=>{
-        const tgl = t.created_at?.slice(0,10);
-        if(!hariMap[tgl]) hariMap[tgl]={date:tgl,pemasukan:0,pengeluaran:0,tx:0};
-        hariMap[tgl].pemasukan+=t.total; hariMap[tgl].tx++;
-      });
+      const ensureDay = tgl => {
+        if(!hariMap[tgl]) hariMap[tgl]={date:tgl,pemasukan:0,pengeluaran:0,tx:0,masukList:[],keluarList:[]};
+        return hariMap[tgl];
+      };
+      if(payBased){
+        paysPeriode.forEach(p=>{
+          const d = ensureDay(p.created_at?.slice(0,10));
+          if(p.type==='masuk'){
+            d.pemasukan+=(p.amount||0); d.tx++;
+            d.masukList.push({label:p.note||'Pemasukan', amount:p.amount||0, method:p.method, txId:p.transaction_id||null});
+          } else {
+            d.pengeluaran+=(p.amount||0);
+            d.keluarList.push({label:p.note||'Pengeluaran', amount:p.amount||0, txId:p.transaction_id||null});
+          }
+        });
+      } else {
+        txPeriode.forEach(t=>{
+          const d = ensureDay(t.created_at?.slice(0,10));
+          d.pemasukan+=t.total; d.tx++;
+          d.masukList.push({label:`Penjualan ${t.invoice_no||('#'+t.id)}${t.customer&&t.customer!=='Umum'?' · '+t.customer:''}`, amount:t.total, txId:t.id});
+        });
+      }
       poPeriode.forEach(p=>{
-        const tgl = p.created_at?.slice(0,10);
-        if(!hariMap[tgl]) hariMap[tgl]={date:tgl,pemasukan:0,pengeluaran:0,tx:0};
-        hariMap[tgl].pengeluaran+=p.total;
+        const d = ensureDay(p.created_at?.slice(0,10));
+        d.pengeluaran+=p.total;
+        d.keluarList.push({label:`Pembelian PO-${p.id}${p.supplier?' · '+p.supplier:''}`, amount:p.total});
+      });
+      debtPeriode.filter(db=>db.status==='Lunas').forEach(db=>{
+        const d = ensureDay(db.created_at?.slice(0,10));
+        d.pengeluaran+=(db.amount||0);
+        d.keluarList.push({label:db.description||`Hutang ${db.party_name||''}`, amount:db.amount||0});
       });
 
       setData({
@@ -6072,23 +6332,64 @@ function ArusKeuanganDetail({onBack}) {
 
           <div style={{fontSize:11,color:MT,marginBottom:10}}>*tekan untuk melihat lebih detail</div>
 
-          {data.perHari.map((d,i)=>(
-            <div key={i} style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:8,boxShadow:'0 1px 4px rgba(0,0,0,0.07)',display:'flex',gap:14,alignItems:'flex-start'}}>
-              <div style={{textAlign:'center',flexShrink:0,minWidth:36}}>
-                <div style={{fontWeight:900,fontSize:22,lineHeight:1,color:TX}}>{d.date.slice(8)}</div>
-                <div style={{fontSize:10,color:MT}}>{new Date(d.date).toLocaleDateString('id-ID',{month:'short'})}</div>
-                <div style={{fontSize:10,color:MT}}>{d.date.slice(0,4)}</div>
+          {data.perHari.map((d,i)=>{
+            const isOpen = openDay===d.date;
+            return (
+            <div key={i} onClick={()=>setOpenDay(isOpen?null:d.date)}
+              style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:8,boxShadow:isOpen?'0 2px 10px rgba(0,0,0,0.12)':'0 1px 4px rgba(0,0,0,0.07)',cursor:'pointer',border:isOpen?`1.5px solid ${G}`:'1.5px solid transparent'}}>
+              <div style={{display:'flex',gap:14,alignItems:'flex-start'}}>
+                <div style={{textAlign:'center',flexShrink:0,minWidth:36}}>
+                  <div style={{fontWeight:900,fontSize:22,lineHeight:1,color:TX}}>{d.date.slice(8)}</div>
+                  <div style={{fontSize:10,color:MT}}>{new Date(d.date).toLocaleDateString('id-ID',{month:'short'})}</div>
+                  <div style={{fontSize:10,color:MT}}>{d.date.slice(0,4)}</div>
+                </div>
+                <div style={{flex:1,display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,fontSize:11}}>
+                  <div><div style={{color:MT}}>Pemasukan</div><div style={{fontWeight:700,color:G}}>{fmt(d.pemasukan)}</div></div>
+                  <div><div style={{color:MT}}>Pengeluaran</div><div style={{fontWeight:700,color:RD}}>{fmt(d.pengeluaran)}</div></div>
+                  <div><div style={{color:MT}}>Neto</div><div style={{fontWeight:700,color:(d.pemasukan-d.pengeluaran)>=0?G:RD}}>{fmt(d.pemasukan-d.pengeluaran)}</div></div>
+                  <div style={{alignSelf:'end'}}><span style={{color:MT}}>{d.tx} Transaksi</span></div>
+                </div>
+                <div style={{color:G,fontSize:18,flexShrink:0,transform:isOpen?'rotate(90deg)':'none',transition:'transform 0.15s'}}>›</div>
               </div>
-              <div style={{flex:1,display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,fontSize:11}}>
-                <div><div style={{color:MT}}>Pemasukan</div><div style={{fontWeight:700,color:G}}>{fmt(d.pemasukan)}</div></div>
-                <div><div style={{color:MT}}>Pengeluaran</div><div style={{fontWeight:700,color:RD}}>{fmt(d.pengeluaran)}</div></div>
-                <div><div style={{color:MT}}>Pemasukan Lain</div><div style={{fontWeight:600}}>Rp 0</div></div>
-                <div><div style={{color:MT}}>Pengeluaran Lain</div><div style={{fontWeight:600}}>Rp 0</div></div>
-                <div style={{gridColumn:'span 2'}}><span style={{color:MT}}>{d.tx} Transaksi</span></div>
-              </div>
-              <div style={{color:G,fontSize:18,flexShrink:0}}>›</div>
+              {isOpen&&(
+                <div style={{marginTop:10,paddingTop:10,borderTop:'1px dashed #ddd'}} onClick={e=>e.stopPropagation()}>
+                  {(d.masukList||[]).length>0&&(
+                    <>
+                      <div style={{fontSize:11,fontWeight:700,color:GD,marginBottom:6}}>💰 UANG MASUK</div>
+                      {d.masukList.map((m,j)=>(
+                        <div key={j} onClick={()=>m.txId&&onOpenInvoice&&onOpenInvoice(m.txId)}
+                          style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 10px',background:GL,borderRadius:8,marginBottom:4,cursor:m.txId&&onOpenInvoice?'pointer':'default'}}>
+                          <div style={{fontSize:11,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.label}{m.method?<span style={{color:MT}}> · {m.method}</span>:null}</div>
+                          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
+                            <span style={{fontSize:11,fontWeight:700,color:GD}}>+{fmt(m.amount)}</span>
+                            {m.txId&&onOpenInvoice&&<span style={{color:GD,fontSize:13}}>›</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {(d.keluarList||[]).length>0&&(
+                    <>
+                      <div style={{fontSize:11,fontWeight:700,color:RD,marginBottom:6,marginTop:(d.masukList||[]).length>0?8:0}}>💸 UANG KELUAR</div>
+                      {d.keluarList.map((k,j)=>(
+                        <div key={j} onClick={()=>k.txId&&onOpenInvoice&&onOpenInvoice(k.txId)}
+                          style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 10px',background:'#FFF0F0',borderRadius:8,marginBottom:4,cursor:k.txId&&onOpenInvoice?'pointer':'default'}}>
+                          <div style={{fontSize:11,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.label}</div>
+                          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
+                            <span style={{fontSize:11,fontWeight:700,color:RD}}>-{fmt(k.amount)}</span>
+                            {k.txId&&onOpenInvoice&&<span style={{color:RD,fontSize:13}}>›</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {(d.masukList||[]).length===0&&(d.keluarList||[]).length===0&&(
+                    <div style={{fontSize:11,color:MT,textAlign:'center',padding:8}}>Tidak ada rincian</div>
+                  )}
+                </div>
+              )}
             </div>
-          ))}
+          );})}
         </>
       )}
     </div>
@@ -6111,7 +6412,7 @@ function LaporanPembelian({onBack}) {
       let dari;
       if(periode==='hari_ini') dari=today;
       else dari=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
-      const pos = await sbGet('purchase_orders',{order:'created_at',asc:false});
+      const pos = await sbGetAll('purchase_orders',{order:'created_at',asc:false});
       const filtered = pos.filter(p=>p.created_at?.slice(0,10)>=dari);
       const withItems = await Promise.all(filtered.map(async po=>({
         ...po, items: await sbGet('po_items',{eq:{po_id:po.id}})
@@ -6228,7 +6529,7 @@ function LaporanPengunjung({onBack}) {
         let dari;
         if(periode==='hari_ini') dari=today;
         else dari=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
-        const txs = await sbGet('transactions',{order:'created_at',asc:false});
+        const txs = await sbGetAll('transactions',{order:'created_at',asc:false});
         const filtered = txs.filter(t=>t.created_at?.slice(0,10)>=dari);
         // Group by customer
         const map = {};
@@ -6301,11 +6602,13 @@ function LaporanPengunjung({onBack}) {
 function Laporan({refreshKey}) {
   const [subPage, setSubPage] = useState(null);
   const [period, setPeriod]   = useState('30');
+  const [targetTxId, setTargetTxId] = useState(null);
+  const gotoInvoice = (txId)=>{ if(!txId) return; setTargetTxId(txId); setSubPage('penjualan'); };
 
   if(subPage==='ringkasan')   return <RingkasanPenjualan period={period} onBack={()=>setSubPage(null)}/>;
-  if(subPage==='labarugi')    return <LaporanLabaRugiDetail onBack={()=>setSubPage(null)}/>;
-  if(subPage==='aruskeuangan')return <ArusKeuanganDetail onBack={()=>setSubPage(null)}/>;
-  if(subPage==='penjualan')   return <LaporanPenjualan onBack={()=>setSubPage(null)}/>;
+  if(subPage==='labarugi')    return <LaporanLabaRugiDetail onBack={()=>setSubPage(null)} onOpenInvoice={gotoInvoice}/>;
+  if(subPage==='aruskeuangan')return <ArusKeuanganDetail onBack={()=>setSubPage(null)} onOpenInvoice={gotoInvoice}/>;
+  if(subPage==='penjualan')   return <LaporanPenjualan onBack={()=>setSubPage(null)} initialTxId={targetTxId} onConsumeTarget={()=>setTargetTxId(null)}/>;
   if(subPage==='pembelian')   return <LaporanPembelian onBack={()=>setSubPage(null)}/>;
   if(subPage==='pengunjung')  return <LaporanPengunjung onBack={()=>setSubPage(null)}/>;
   if(subPage==='barang')      return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><LaporanPenjualanBarang period={period}/></div>;
@@ -7044,6 +7347,585 @@ Harga jual saran: ${fmt(saran20)}`)) return;
 
 
 // ── PEMBELIAN ──────────────────────────────────────────────────────────────
+// ── Helper: catat arus kas ke tabel payments (basis tanggal uang berpindah) ─
+async function catatPembayaran({transaction_id=null, type='masuk', amount=0, method=null, note=''}) {
+  if(!amount||amount<=0) return;
+  try {
+    await sbInsert('payments',[{transaction_id, type, amount, method, note}]);
+  } catch(e){
+    console.warn('Tabel payments belum ada — jalankan SQL migrasi agar arus kas akurat. ('+e.message+')');
+  }
+}
+
+// ── Helper: kembalikan stok (retur pelanggan / hapus / revisi transaksi) ────
+async function stokMasuk(productId, qty, note) {
+  if(!productId||!qty) return;
+  try {
+    const prods = await sbGet('products',{eq:{id:productId}});
+    const prod = prods?.[0]; if(!prod) return;
+    await sbUpdate('products', productId, {stock:(prod.stock||0)+qty});
+    // Un-consume batch FIFO: isi kembali batch terbaru yang sudah terpakai
+    let left = qty;
+    const batches = (await sbGet('stock_batches',{eq:{product_id:productId},order:'tanggal_masuk',asc:false}).catch(()=>[]))||[];
+    for(const b of batches){
+      if(left<=0) break;
+      const ruang = (b.qty_awal||0)-(b.qty_sisa||0);
+      if(ruang<=0) continue;
+      const add = Math.min(ruang,left);
+      await sbUpdate('stock_batches',b.id,{qty_sisa:(b.qty_sisa||0)+add}).catch(()=>{});
+      left -= add;
+    }
+    await sbInsert('stock_logs',[{product_id:productId,type:'masuk',qty,notes:note}]).catch(()=>{});
+  } catch(e){ console.warn('stokMasuk gagal:',e.message); }
+}
+
+// ── Helper: keluarkan stok FIFO (tambahan item saat revisi transaksi) ───────
+async function stokKeluar(productId, qty, note) {
+  if(!productId||!qty) return;
+  try {
+    const prods = await sbGet('products',{eq:{id:productId}});
+    const prod = prods?.[0]; if(!prod) return;
+    await sbUpdate('products', productId, {stock:Math.max(0,(prod.stock||0)-qty)});
+    let left = qty;
+    const batches = ((await sbGet('stock_batches',{eq:{product_id:productId},order:'tanggal_masuk',asc:true}).catch(()=>[]))||[]).filter(b=>b.qty_sisa>0);
+    for(const b of batches){
+      if(left<=0) break;
+      const ambil = Math.min(b.qty_sisa,left);
+      await sbUpdate('stock_batches',b.id,{qty_sisa:b.qty_sisa-ambil}).catch(()=>{});
+      left -= ambil;
+    }
+    await sbInsert('stock_logs',[{product_id:productId,type:'keluar',qty,notes:note}]).catch(()=>{});
+  } catch(e){ console.warn('stokKeluar gagal:',e.message); }
+}
+
+// ── Helper: sesuaikan stok akibat revisi/retur PO ───────────────────────────
+// deltaItems: [{product_id, name, satuan, delta}] — delta dalam satuan PO (bisa minus)
+async function adjustStockPO(deltaItems, poId, note) {
+  let allProds = null;
+  for(const d of (deltaItems||[])) {
+    if(!d.delta) continue;
+    let prod = null;
+    if(d.product_id) {
+      const r = await sbGet('products',{eq:{id:d.product_id}}).catch(()=>[]);
+      prod = r?.[0]||null;
+    }
+    if(!prod && d.name) {
+      if(!allProds) allProds = await sbGetAll('products',{order:'name'}).catch(()=>[]);
+      const q = (d.name||'').toLowerCase().trim();
+      prod = allProds.find(p=>p.name.toLowerCase()===q)
+          || allProds.find(p=>p.name.toLowerCase().includes(q)||q.includes(p.name.toLowerCase()));
+    }
+    if(!prod) continue;
+    // Konversi unit besar → unit kecil (sama seperti saat terima PO)
+    const itemUnit  = (d.satuan||'').toLowerCase();
+    const unitBesar = (prod.unit_besar||'').toLowerCase();
+    const isBesar   = unitBesar&&unitBesar!=='pcs'&&itemUnit&&(itemUnit===unitBesar||itemUnit.includes(unitBesar)||unitBesar.includes(itemUnit));
+    const konv      = isBesar?(prod.konversi||1):1;
+    const qtyDelta  = d.delta*konv;
+    await sbUpdate('products', prod.id, {stock: Math.max(0,(prod.stock||0)+qtyDelta)}).catch(()=>{});
+    // Sesuaikan batch FIFO milik PO ini
+    const batches = await sbGet('stock_batches',{eq:{product_id:prod.id,po_id:poId}}).catch(()=>[]);
+    if(batches?.length){
+      const b = batches[0];
+      await sbUpdate('stock_batches', b.id, {
+        qty_awal: Math.max(0,(b.qty_awal||0)+qtyDelta),
+        qty_sisa: Math.max(0,(b.qty_sisa||0)+qtyDelta),
+      }).catch(()=>{});
+    }
+    await sbInsert('stock_logs',[{
+      product_id: prod.id,
+      type: qtyDelta>0?'masuk':'keluar',
+      qty: Math.abs(qtyDelta),
+      notes: note,
+    }]).catch(()=>{});
+  }
+}
+
+// ── Helper: simpan riwayat revisi PO (kolom jsonb `revisions`) ──────────────
+// Return array revisi terbaru, atau null kalau kolom belum ada di database
+async function appendPORevision(po, entry, extraFields={}) {
+  const revs = Array.isArray(po.revisions)?[...po.revisions,entry]:[entry];
+  try {
+    await sbUpdate('purchase_orders', po.id, {...extraFields, revisions: revs});
+    return revs;
+  } catch(e) {
+    // Kolom revisions belum ada → simpan field lain saja, riwayat di-skip
+    await sbUpdate('purchase_orders', po.id, extraFields).catch(()=>{});
+    console.warn('Kolom revisions belum ada. Jalankan SQL: alter table purchase_orders add column revisions jsonb default \'[]\';');
+    return null;
+  }
+}
+
+// ── Print invoice revisi PO: lampiran invoice lama vs baru ──────────────────
+function printRevisiPO(po, rev) {
+  const toko = window.TOKO_NAMA||'SURYA LISTRIK';
+  const tglRev = rev.tanggal?new Date(rev.tanggal).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}):'-';
+  const isRetur = rev.tipe==='retur';
+  const selisih = (rev.totalBaru||0)-(rev.totalLama||0);
+  const w = window.open('','_blank','width=780,height=700');
+  w.document.write('<!DOCTYPE html><html><head><title>'+(isRetur?'Nota Retur':'Invoice Revisi')+' PO-'+po.id+'</title><style>'+
+    'body{font-family:Arial,sans-serif;padding:20px;max-width:700px;margin:0 auto;font-size:12px;color:#222}'+
+    '.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}'+
+    'table{width:100%;border-collapse:collapse;margin:6px 0}'+
+    'th{background:#f5f5f5;padding:6px 8px;text-align:left;font-size:10px;color:#777}'+
+    'td{padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:11px}'+
+    '.added{background:#E8F5E9}.removed{background:#FFEBEE;text-decoration:line-through;color:#999}'+
+    '.box{padding:12px;border-radius:8px;margin:12px 0}'+
+    '@media print{button{display:none}}'+
+    '</style></head><body>'+
+    '<div style="display:flex;justify-content:space-between;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:14px">'+
+      '<div><b style="font-size:16px">'+toko+'</b><div style="color:#777;font-size:10px">'+(window.TOKO_ALAMAT||'')+'</div></div>'+
+      '<div style="text-align:right"><b style="font-size:14px;color:'+(isRetur?'#C62828':'#E65100')+'">'+(isRetur?'NOTA RETUR PEMBELIAN':'INVOICE REVISI PO')+'</b>'+
+      '<br/>PO-'+po.id+'<br/>Supplier: '+(po.supplier||'-')+'<br/>Tgl revisi: '+tglRev+'</div></div>'+
+    (rev.catatan?'<div class="box" style="background:#FFF8E1;border:1px solid #F9A825"><b>📝 '+(isRetur?'Alasan retur':'Catatan')+':</b> '+rev.catatan+'</div>':'')+
+    '<div class="grid">'+
+    '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#777">📋 INVOICE LAMA</div>'+
+    '<table><thead><tr><th>Barang</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead><tbody>'+
+    (rev.itemsLama||[]).map(function(i){return '<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';}).join('')+
+    '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;text-align:right;border-top:2px solid #eee">Rp '+(rev.totalLama||0).toLocaleString('id-ID')+'</td></tr>'+
+    '</tbody></table></div>'+
+    '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#1a472a">📋 INVOICE BARU</div>'+
+    '<table><thead><tr><th>Barang</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead><tbody>'+
+    (rev.itemsBaru||[]).map(function(i){
+      const old=(rev.itemsLama||[]).find(function(o){return o.name===i.name;});
+      const cls=!old?'added':(old.qty!==i.qty?'added':'');
+      return '<tr class="'+cls+'"><td>'+i.name+(!old?' ✨':'')+'</td><td>'+i.qty+(old&&old.qty!==i.qty?' <span style="color:#999;font-size:9px">(dari '+old.qty+')</span>':'')+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';
+    }).join('')+
+    (rev.itemsLama||[]).filter(function(o){return !(rev.itemsBaru||[]).find(function(n){return n.name===o.name;});}).map(function(i){
+      return '<tr class="removed"><td>'+i.name+' ❌</td><td>'+i.qty+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';
+    }).join('')+
+    '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;text-align:right;border-top:2px solid #1a472a;color:#1a472a">Rp '+(rev.totalBaru||0).toLocaleString('id-ID')+'</td></tr>'+
+    '</tbody></table></div></div>'+
+    (isRetur&&(rev.itemsRetur||[]).length?
+      '<div style="font-weight:700;font-size:11px;margin:10px 0 4px;color:#C62828">↩️ BARANG YANG DIRETUR</div>'+
+      '<table><thead><tr><th>Barang</th><th>Qty Retur</th><th style="text-align:right">Nilai</th></tr></thead><tbody>'+
+      rev.itemsRetur.map(function(i){return '<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';}).join('')+
+      '</tbody></table>':'')+
+    '<div class="box" style="background:'+(selisih>0?'#FFF3E0':'#E8F5E9')+';border:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
+    '<b style="color:'+(selisih>0?'#E65100':'#1a472a')+';font-size:14px">'+(selisih>0?'💸 TAGIHAN BERTAMBAH':'💰 TAGIHAN BERKURANG')+'</b><br/><br/>'+
+    '<div style="display:flex;justify-content:space-between"><span>Total Lama</span><span>Rp '+(rev.totalLama||0).toLocaleString('id-ID')+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between"><span>Total Baru</span><span>Rp '+(rev.totalBaru||0).toLocaleString('id-ID')+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding-top:8px;border-top:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
+    '<span>Selisih</span><span style="color:'+(selisih>0?'#E65100':'#1a472a')+'">Rp '+Math.abs(selisih).toLocaleString('id-ID')+'</span></div>'+
+    '<div style="font-size:10px;color:#777;margin-top:6px">'+(po.bayar==='Hutang'
+      ?(selisih>0?'Hutang ke supplier bertambah.':'Hutang ke supplier berkurang.')
+      :(selisih>0?'Perlu bayar tambahan ke supplier.':'Minta refund / potongan nota ke supplier.'))+'</div></div>'+
+    '<div style="display:flex;justify-content:space-between;margin-top:30px;padding:0 30px;text-align:center;font-size:11px">'+
+    '<div><div style="margin-bottom:44px">Hormat kami,</div><div style="border-top:1px solid #999;padding-top:4px;min-width:130px">'+toko+'</div></div>'+
+    '<div><div style="margin-bottom:44px">Supplier,</div><div style="border-top:1px solid #999;padding-top:4px;min-width:130px">'+(po.supplier||'')+'</div></div></div>'+
+    '<div style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700">🖨️ Print</button></div>'+
+    '</body></html>');
+  w.document.close(); w.focus();
+}
+
+// ── FORM RETUR PO KE SUPPLIER ────────────────────────────────────────────────
+function ReturPOForm({po, onDone, onCancel}) {
+  const items = po.items||[];
+  const [sel, setSel] = React.useState(()=>{const o={};items.forEach((it,i)=>{o[i]={checked:false,qty:it.qty};});return o;});
+  const [reason, setReason] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+
+  const returQtyOf = (i,it) => sel[i]?.checked?Math.min(Math.max(parseInt(sel[i].qty)||0,0),it.qty):0;
+  const totalRetur = items.reduce((s,it,i)=>s+returQtyOf(i,it)*(it.price||0),0);
+
+  const save = async() => {
+    const returItems = items.map((it,i)=>({name:it.name,qty:returQtyOf(i,it),price:it.price||0,satuan:it.satuan,product_id:it.product_id})).filter(it=>it.qty>0);
+    if(!returItems.length) return alert('Pilih minimal 1 barang yang diretur!');
+    if(!reason.trim()) return alert('Isi alasan retur!');
+    if(!confirm(`Retur ${returItems.length} barang senilai ${fmt(totalRetur)} ke ${po.supplier}?\n\nTotal PO, keuangan, dan stok akan disesuaikan otomatis.`)) return;
+    setSaving(true);
+    try {
+      // 1. Susun item baru setelah retur
+      const newItems = items.map((it,i)=>({...it, qty: it.qty - returQtyOf(i,it)})).filter(it=>it.qty>0);
+      const newTotal = newItems.reduce((s,i2)=>s+(i2.qty*(i2.price||0)),0);
+
+      // 2. Ganti po_items di database
+      const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+      await sbc.from('po_items').delete().eq('po_id', po.id);
+      if(newItems.length) await sbInsert('po_items', newItems.map(i2=>({
+        po_id: po.id, name: i2.name, qty: parseInt(i2.qty)||0, price: parseInt(i2.price)||0,
+        subtotal: (parseInt(i2.qty)||0)*(parseInt(i2.price)||0),
+        product_id: i2.product_id||null, satuan: i2.satuan||'pcs',
+      })));
+
+      // 3. Update total PO + simpan riwayat revisi
+      const entry = {
+        tanggal: new Date().toISOString(),
+        tipe: 'retur',
+        catatan: reason,
+        totalLama: po.total||0,
+        totalBaru: newTotal,
+        totalRetur,
+        itemsLama: items.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price||0})),
+        itemsBaru: newItems.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price||0})),
+        itemsRetur: returItems.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price})),
+      };
+      const revs = await appendPORevision(po, entry, {total:newTotal});
+
+      // 4. Stok berkurang (hanya jika barang sudah diterima / stok sudah masuk)
+      if(po.status==='Diterima') {
+        await adjustStockPO(
+          returItems.map(it=>({product_id:it.product_id,name:it.name,satuan:it.satuan,delta:-it.qty})),
+          po.id, `Retur PO-${po.id} ke ${po.supplier}: ${reason}`
+        );
+      }
+
+      notifyDataChanged('pembelian');
+      const infoKeuangan = po.bayar==='Hutang'
+        ? `Hutang ke ${po.supplier} otomatis berkurang ${fmt(totalRetur)}.`
+        : `⚠️ PO sudah LUNAS — minta refund / potongan nota ${fmt(totalRetur)} ke supplier.`;
+      alert(`✅ Retur berhasil dicatat!\n\nTotal PO: ${fmt(po.total||0)} → ${fmt(newTotal)}\n${infoKeuangan}${po.status==='Diterima'?'\nStok sudah disesuaikan otomatis.':''}${revs===null?'\n\n⚠️ Riwayat revisi tidak tersimpan (kolom belum ada). Jalankan SQL migrasi.':''}`);
+      onDone({total:newTotal, items:newItems, revisions:revs!==null?revs:po.revisions});
+    } catch(e){ alert('Gagal: '+e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14,border:`1.5px solid ${RD}`}}>
+      <div style={{fontWeight:800,fontSize:15,marginBottom:4,color:RD}}>↩️ Retur ke Supplier</div>
+      <div style={{fontSize:12,color:MT,marginBottom:12}}>Pilih barang yang dikembalikan ke {po.supplier}</div>
+      {items.map((it,i)=>(
+        <div key={i} style={{background:sel[i]?.checked?'#FFF0F0':'#F5F6FA',borderRadius:10,padding:'10px 12px',marginBottom:8,border:`1.5px solid ${sel[i]?.checked?RD:'#eee'}`}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <input type="checkbox" checked={sel[i]?.checked||false}
+              onChange={()=>setSel(p=>({...p,[i]:{...p[i],checked:!p[i]?.checked}}))}
+              style={{width:17,height:17,cursor:'pointer',accentColor:RD}}/>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13}}>{it.name}</div>
+              <div style={{fontSize:11,color:MT}}>Dibeli: {it.qty} {it.satuan||'pcs'} × {fmt(it.price)}</div>
+            </div>
+            {sel[i]?.checked&&(
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <span style={{fontSize:11,color:MT}}>Qty retur:</span>
+                <input type="number" min={1} max={it.qty} value={sel[i].qty}
+                  onChange={e=>setSel(p=>({...p,[i]:{...p[i],qty:e.target.value}}))}
+                  style={{width:60,padding:'6px 8px',border:`1.5px solid ${RD}`,borderRadius:8,fontSize:13,fontWeight:700,textAlign:'center'}}/>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+      <div style={{marginBottom:10}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Alasan retur *</label>
+        <input value={reason} onChange={e=>setReason(e.target.value)}
+          placeholder="Barang rusak / tidak sesuai pesanan / dll"
+          style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+      </div>
+      {totalRetur>0&&(
+        <div style={{background:'#FFF0F0',borderRadius:8,padding:'10px 14px',marginBottom:10,display:'flex',justifyContent:'space-between'}}>
+          <span style={{fontWeight:700,fontSize:13,color:RD}}>Total Retur</span>
+          <span style={{fontWeight:800,fontSize:15,color:RD}}>{fmt(totalRetur)}</span>
+        </div>
+      )}
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={onCancel} disabled={saving}
+          style={{flex:1,padding:12,background:'#eee',border:'none',borderRadius:10,fontWeight:700,fontSize:13,cursor:'pointer'}}>Batal</button>
+        <button onClick={save} disabled={saving||!totalRetur}
+          style={{flex:2,padding:12,background:saving||!totalRetur?MT:RD,color:'#fff',border:'none',borderRadius:10,fontWeight:800,fontSize:14,cursor:'pointer'}}>
+          {saving?'⏳ Menyimpan...':'↩️ Proses Retur'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── RIWAYAT REVISI PO ────────────────────────────────────────────────────────
+function RiwayatRevisiPO({po}) {
+  const revs = Array.isArray(po.revisions)?po.revisions:[];
+  if(!revs.length) return null;
+  return (
+    <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>📜 Riwayat Revisi ({revs.length})</div>
+      {revs.map((r,i)=>{
+        const isRetur = r.tipe==='retur';
+        const selisih = (r.totalBaru||0)-(r.totalLama||0);
+        return (
+          <div key={i} style={{background:'#F5F6FA',borderRadius:10,padding:'10px 12px',marginBottom:8,borderLeft:`3px solid ${isRetur?RD:OR}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+              <div>
+                <span style={{fontWeight:700,fontSize:12,color:isRetur?RD:OR}}>{isRetur?'↩️ Retur':'✏️ Edit'} #{i+1}</span>
+                <span style={{fontSize:11,color:MT,marginLeft:8}}>{r.tanggal?new Date(r.tanggal).toLocaleString('id-ID',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}):''}</span>
+              </div>
+              <button onClick={()=>printRevisiPO(po,r)}
+                style={{padding:'4px 12px',background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:6,cursor:'pointer',fontSize:11,color:'#1976D2',fontWeight:700}}>
+                🖨️ Invoice
+              </button>
+            </div>
+            <div style={{fontSize:12}}>
+              {fmt(r.totalLama)} → <b style={{color:selisih>0?OR:GD}}>{fmt(r.totalBaru)}</b>
+              <span style={{color:selisih>0?OR:GD,fontWeight:700,marginLeft:6}}>({selisih>0?'+':''}{fmt(selisih).replace('Rp ','Rp ')})</span>
+            </div>
+            {r.catatan&&<div style={{fontSize:11,color:MT,marginTop:2}}>📝 {r.catatan}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── VIEW EDIT PO (komponen terpisah agar hooks React legal) ─────────────────
+function EditPOView({po, onCancel, onSaved}) {
+    const [editForm, setEditForm] = React.useState({
+      supplier:    po.supplier||'',
+      bayar:       po.bayar||'Lunas',
+      due_date:    po.due_date||'',
+      notes:       po.notes||'',
+      status:      po.status||'Proses',
+    });
+    const [items, setItems] = React.useState(
+      (po.items||[]).map(i=>({...i, name:i.name||'', qty:i.qty||1, price:i.price||0}))
+    );
+    const [savingEdit, setSavingEdit] = React.useState(false);
+
+    const saveEdit = async() => {
+      if(!editForm.supplier) return alert('Nama supplier wajib!');
+      if(items.length===0) return alert('Minimal 1 item!');
+      setSavingEdit(true);
+      try {
+        const totalEdit = items.reduce((s,i)=>s+(i.qty*i.price),0);
+        const totalLama = po.total||0;
+        const itemsBerubah = JSON.stringify((po.items||[]).map(i=>({n:i.name,q:i.qty,p:i.price})))
+                          !== JSON.stringify(items.map(i=>({n:i.name,q:parseInt(i.qty)||0,p:parseInt(i.price)||0})));
+
+        // ── Riwayat revisi (hanya jika total/item berubah) ──
+        let newRevs = Array.isArray(po.revisions)?po.revisions:[];
+        if(totalEdit!==totalLama||itemsBerubah) {
+          const entry = {
+            tanggal: new Date().toISOString(),
+            tipe: 'edit',
+            catatan: editForm.notes||'',
+            totalLama,
+            totalBaru: totalEdit,
+            itemsLama: (po.items||[]).map(i=>({name:i.name,qty:i.qty,price:i.price||0})),
+            itemsBaru: items.map(i=>({name:i.name,qty:parseInt(i.qty)||0,price:parseInt(i.price)||0})),
+          };
+          const r = await appendPORevision(po, entry, {
+            supplier:  editForm.supplier,
+            bayar:     editForm.bayar,
+            due_date:  editForm.due_date||null,
+            notes:     editForm.notes||'',
+            status:    editForm.status,
+            total:     totalEdit,
+          });
+          if(r!==null) newRevs = r;
+        } else {
+          await sbUpdate('purchase_orders', po.id, {
+            supplier:  editForm.supplier,
+            bayar:     editForm.bayar,
+            due_date:  editForm.due_date||null,
+            notes:     editForm.notes||'',
+            status:    editForm.status,
+            total:     totalEdit,
+          });
+        }
+
+        // Delete & reinsert items
+        const sb = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+        await sb.from('po_items').delete().eq('po_id', po.id);
+        await sbInsert('po_items', items.map(i=>({
+          po_id: po.id,
+          name: i.name,
+          qty: parseInt(i.qty)||1,
+          price: parseInt(i.price)||0,
+          subtotal: (parseInt(i.qty)||1)*(parseInt(i.price)||0),
+          product_id: i.product_id||null,
+          satuan: i.satuan||'pcs',
+        })));
+
+        // ── Sesuaikan stok kalau barang PO sudah diterima (stok sudah masuk) ──
+        if(po.status==='Diterima'&&itemsBerubah) {
+          const key = it=>it.product_id?('p'+it.product_id):('n'+(it.name||'').toLowerCase().trim());
+          const oldMap={}, newMap={}, meta={};
+          (po.items||[]).forEach(it=>{oldMap[key(it)]=(oldMap[key(it)]||0)+(parseInt(it.qty)||0);meta[key(it)]=it;});
+          items.forEach(it=>{newMap[key(it)]=(newMap[key(it)]||0)+(parseInt(it.qty)||0);meta[key(it)]=it;});
+          const deltas=[];
+          Object.keys({...oldMap,...newMap}).forEach(k=>{
+            const d=(newMap[k]||0)-(oldMap[k]||0);
+            if(d) deltas.push({product_id:meta[k].product_id,name:meta[k].name,satuan:meta[k].satuan,delta:d});
+          });
+          if(deltas.length) await adjustStockPO(deltas, po.id, `Revisi PO-${po.id} (${po.supplier})`);
+        }
+
+        notifyDataChanged('pembelian');
+        const selisih = totalEdit-totalLama;
+        alert(`✅ PO berhasil diupdate!${selisih!==0?`\nTotal: ${fmt(totalLama)} → ${fmt(totalEdit)}${editForm.bayar==='Hutang'?`\nHutang supplier ${selisih>0?'bertambah':'berkurang'} ${fmt(Math.abs(selisih))}`:''}`:''}${po.status==='Diterima'&&itemsBerubah?'\nStok sudah disesuaikan otomatis.':''}`);
+        onSaved({...editForm, total:totalEdit, items, revisions:newRevs});
+      } catch(e){ alert('Gagal: '+e.message); }
+      setSavingEdit(false);
+    };
+
+    return (
+      <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+          <button onClick={onCancel} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:14,padding:0}}>←</button>
+          <h2 style={{margin:0,fontSize:17,fontWeight:800}}>✏️ Edit PO-{po.id}</h2>
+        </div>
+
+        {/* Form supplier */}
+        <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{marginBottom:10}}>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Supplier</label>
+            <input value={editForm.supplier} onChange={e=>setEditForm(f=>({...f,supplier:e.target.value}))}
+              style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+            <div>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Status Bayar</label>
+              <select value={editForm.bayar} onChange={e=>setEditForm(f=>({...f,bayar:e.target.value}))}
+                style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
+                {['Lunas','Hutang','Belum'].map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Status PO</label>
+              <select value={editForm.status} onChange={e=>setEditForm(f=>({...f,status:e.target.value}))}
+                style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
+                {['Proses','Diterima','Dibatalkan'].map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{marginBottom:10}}>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Jatuh Tempo</label>
+            <input type="date" value={editForm.due_date} onChange={e=>setEditForm(f=>({...f,due_date:e.target.value}))}
+              style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Catatan</label>
+            <input value={editForm.notes} onChange={e=>setEditForm(f=>({...f,notes:e.target.value}))}
+              placeholder="Catatan..." style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+        </div>
+
+        {/* Edit items */}
+        <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:700,fontSize:13}}>🛒 Daftar Barang</div>
+            <button onClick={()=>setItems(prev=>[...prev,{name:'',qty:1,price:0,satuan:'pcs',product_id:null}])}
+              style={{padding:'5px 12px',background:GL,border:`1px solid ${G}`,borderRadius:8,cursor:'pointer',color:GD,fontWeight:700,fontSize:12}}>
+              + Item
+            </button>
+          </div>
+          {items.map((item,i)=>(
+            <div key={i} style={{background:'#F5F6FA',borderRadius:10,padding:10,marginBottom:8}}>
+              <div style={{display:'flex',gap:6,marginBottom:6}}>
+                <input value={item.name} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,name:e.target.value}:it))}
+                  placeholder="Nama barang"
+                  style={{flex:1,padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+                <button onClick={()=>setItems(prev=>prev.filter((_,j)=>j!==i))}
+                  style={{padding:'7px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,cursor:'pointer',color:RD,fontSize:12}}>🗑️</button>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                <div>
+                  <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty</label>
+                  <input type="number" value={item.qty} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,qty:parseInt(e.target.value)||0}:it))}
+                    style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,textAlign:'center',boxSizing:'border-box'}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Harga Beli</label>
+                  <input type="number" value={item.price} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,price:parseInt(e.target.value)||0}:it))}
+                    style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:GD,fontWeight:700,textAlign:'right',marginTop:5}}>
+                {fmt(item.qty*item.price)}
+              </div>
+            </div>
+          ))}
+          <div style={{display:'flex',justifyContent:'space-between',fontWeight:800,fontSize:15,paddingTop:8,borderTop:`2px solid ${G}`}}>
+            <span>Total Baru</span>
+            <span style={{color:G}}>{fmt(items.reduce((s,i)=>s+i.qty*i.price,0))}</span>
+          </div>
+        </div>
+
+        {/* Notifikasi selisih pembayaran ke supplier */}
+        {(()=>{
+          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
+          const totalLama = po.total||0;
+          const selisih   = totalBaru - totalLama;
+          if(selisih===0) return null;
+          const isNaik = selisih>0;
+          return (
+            <div style={{
+              marginBottom:12,
+              padding:'12px 14px',
+              background: isNaik?'#FFF3E0':'#E8F5E9',
+              border:`1.5px solid ${isNaik?OR:G}`,
+              borderRadius:10,
+            }}>
+              <div style={{fontWeight:700,fontSize:13,color:isNaik?OR:GD,marginBottom:6}}>
+                {isNaik?'💸 Tagihan ke Supplier Bertambah':'💰 Tagihan ke Supplier Berkurang'}
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:3}}>
+                <span style={{color:MT}}>Total lama</span>
+                <span style={{fontWeight:600}}>{fmt(totalLama)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:6}}>
+                <span style={{color:MT}}>Total baru</span>
+                <span style={{fontWeight:600}}>{fmt(totalBaru)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:14,paddingTop:6,borderTop:`1px solid ${isNaik?OR:G}`}}>
+                <span style={{fontWeight:700,color:isNaik?OR:GD}}>
+                  {isNaik?'➕ Tambah bayar ke supplier':'➖ Kurang bayar ke supplier'}
+                </span>
+                <span style={{fontWeight:800,fontSize:15,color:isNaik?OR:GD}}>
+                  {fmt(Math.abs(selisih))}
+                </span>
+              </div>
+              <div style={{fontSize:11,color:MT,marginTop:6}}>
+                {isNaik
+                  ? `Hutang ke supplier bertambah ${fmt(Math.abs(selisih))}`
+                  : `Hutang ke supplier berkurang ${fmt(Math.abs(selisih))}`
+                }
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Print Invoice Revisi PO */}
+        {(()=>{
+          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
+          const totalLama = po.total||0;
+          if(totalBaru===totalLama) return null;
+          const selisih = totalBaru - totalLama;
+          return (
+            <button onClick={()=>{
+              const toko = window.TOKO_NAMA||'SURYA LISTRIK';
+              const w = window.open('','_blank','width=760,height=680');
+              w.document.write('<!DOCTYPE html><html><head><title>Revisi PO</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:680px;margin:0 auto;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}table{width:100%;border-collapse:collapse;margin:6px 0}th{background:#f5f5f5;padding:6px 8px;text-align:left;font-size:10px;color:#777}td{padding:6px 8px;border-bottom:1px solid #f0f0f0}.added{background:#E8F5E9}.removed{background:#FFEBEE;text-decoration:line-through;color:#999}.box{padding:12px;border-radius:8px;margin:12px 0}@media print{button{display:none}}</style></head><body>'+
+                '<div style="display:flex;justify-content:space-between;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:14px"><div><b style="font-size:16px">'+toko+'</b></div><div style="text-align:right"><b style="font-size:14px;color:#C62828">REVISI PURCHASE ORDER</b><br/>PO-'+po.id+'<br/>Supplier: '+po.supplier+'<br/>'+new Date().toLocaleDateString('id-ID')+'</div></div>'+
+                '<div class="grid">'+
+                '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#777">📋 PO LAMA</div><table><thead><tr><th>Barang</th><th>Qty</th><th>Total</th></tr></thead><tbody>'+
+                (po.items||[]).map(i=>'<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
+                '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;border-top:2px solid #eee">Rp '+totalLama.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
+                '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#1a472a">📋 PO BARU</div><table><thead><tr><th>Barang</th><th>Qty</th><th>Total</th></tr></thead><tbody>'+
+                items.map(i=>{ const isNew=!(po.items||[]).find(o=>o.name===i.name); return '<tr class="'+(isNew?'added':'')+'"><td>'+i.name+(isNew?' ✨':'')+'</td><td>'+i.qty+'</td><td>Rp '+((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')+'</td></tr>'; }).join('')+
+                (po.items||[]).filter(o=>!items.find(n=>n.name===o.name)).map(i=>'<tr class="removed"><td>'+i.name+' ❌</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
+                '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;border-top:2px solid #1a472a;color:#1a472a">Rp '+totalBaru.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
+                '</div>'+
+                '<div class="box" style="background:'+(selisih>0?'#FFF3E0':'#E8F5E9')+';border:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
+                '<b style="color:'+(selisih>0?'#E65100':'#1a472a')+';font-size:14px">'+(selisih>0?'💸 TAGIHAN BERTAMBAH':'💰 TAGIHAN BERKURANG')+'</b><br/><br/>'+
+                '<div style="display:flex;justify-content:space-between"><span>Total PO Lama</span><span>Rp '+totalLama.toLocaleString('id-ID')+'</span></div>'+
+                '<div style="display:flex;justify-content:space-between"><span>Total PO Baru</span><span>Rp '+totalBaru.toLocaleString('id-ID')+'</span></div>'+
+                '<div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding-top:8px;border-top:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
+                '<span>'+(selisih>0?'Tambah Bayar':'Kurang Bayar')+'</span><span style="color:'+(selisih>0?'#E65100':'#1a472a')+'">Rp '+Math.abs(selisih).toLocaleString('id-ID')+'</span></div></div>'+
+                '<div style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700">🖨️ Print</button></div>'+
+                '</body></html>');
+              w.document.close(); w.focus();
+            }}
+              style={{width:'100%',padding:10,background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:12,color:'#1976D2',marginBottom:8}}>
+              🖨️ Print Invoice Revisi PO
+            </button>
+          );
+        })()}
+
+        <button onClick={saveEdit} disabled={savingEdit}
+          style={{width:'100%',padding:14,background:savingEdit?MT:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,fontSize:15,cursor:'pointer'}}>
+          {savingEdit?'⏳ Menyimpan...':'💾 Simpan Perubahan'}
+        </button>
+      </div>
+    );
+}
+
 function Pembelian() {
   // View: 'browse' | 'cart' | 'list' | 'detail'
   const [view,       setView]       = useState('list');
@@ -7061,6 +7943,7 @@ function Pembelian() {
   // Checkout form
   const [form, setForm] = useState({supplier_id:'', bayar:'Lunas', due:'', notes:''});
   const [editPO, setEditPO] = useState(false);
+  const [showReturPO, setShowReturPO] = useState(false);
   const [editItems, setEditItems] = useState([]);
   const [showAddSupplierPem, setShowAddSupplierPem] = useState(false);
   const [newSupForm, setNewSupForm] = useState({});
@@ -7071,7 +7954,7 @@ function Pembelian() {
     try {
       const [sups, pos] = await Promise.all([
         sbGet('suppliers',{order:'name'}),
-        sbGet('purchase_orders',{order:'created_at',asc:false}),
+        sbGetAll('purchase_orders',{order:'created_at',asc:false}),
       ]);
       setSuppliers(sups||[]);
       const withItems = await Promise.all((pos||[]).map(async po=>({
@@ -7472,225 +8355,12 @@ function Pembelian() {
   );
 
   // ── VIEW: EDIT PO ──
-  if(view==='detail' && selected && editPO) {
-    const [editForm, setEditForm] = React.useState({
-      supplier:    selected.supplier||'',
-      bayar:       selected.bayar||'Lunas',
-      due_date:    selected.due_date||'',
-      notes:       selected.notes||'',
-      status:      selected.status||'Proses',
-    });
-    const [items, setItems] = React.useState(
-      (selected.items||[]).map(i=>({...i, name:i.name||'', qty:i.qty||1, price:i.price||0}))
-    );
-    const [savingEdit, setSavingEdit] = React.useState(false);
-
-    const saveEdit = async() => {
-      if(!editForm.supplier) return alert('Nama supplier wajib!');
-      if(items.length===0) return alert('Minimal 1 item!');
-      setSavingEdit(true);
-      try {
-        const totalEdit = items.reduce((s,i)=>s+(i.qty*i.price),0);
-        await sbUpdate('purchase_orders', selected.id, {
-          supplier:  editForm.supplier,
-          bayar:     editForm.bayar,
-          due_date:  editForm.due_date||null,
-          notes:     editForm.notes||'',
-          status:    editForm.status,
-          total:     totalEdit,
-        });
-        // Delete & reinsert items
-        const sb = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
-        await sb.from('po_items').delete().eq('po_id', selected.id);
-        await sbInsert('po_items', items.map(i=>({
-          po_id: selected.id,
-          name: i.name,
-          qty: parseInt(i.qty)||1,
-          price: parseInt(i.price)||0,
-          subtotal: (parseInt(i.qty)||1)*(parseInt(i.price)||0),
-          product_id: i.product_id||null,
-          satuan: i.satuan||'pcs',
-        })));
-        notifyDataChanged('pembelian');
-        loadOrders();
-        setEditPO(false);
-        setSelected(s=>({...s,...editForm,total:totalEdit,items}));
-        alert('✅ PO berhasil diupdate!');
-      } catch(e){ alert('Gagal: '+e.message); }
-      setSavingEdit(false);
-    };
-
-    return (
-      <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
-          <button onClick={()=>setEditPO(false)} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:14,padding:0}}>←</button>
-          <h2 style={{margin:0,fontSize:17,fontWeight:800}}>✏️ Edit PO-{selected.id}</h2>
-        </div>
-
-        {/* Form supplier */}
-        <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
-          <div style={{marginBottom:10}}>
-            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Supplier</label>
-            <input value={editForm.supplier} onChange={e=>setEditForm(f=>({...f,supplier:e.target.value}))}
-              style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
-            <div>
-              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Status Bayar</label>
-              <select value={editForm.bayar} onChange={e=>setEditForm(f=>({...f,bayar:e.target.value}))}
-                style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
-                {['Lunas','Hutang','Belum'].map(o=><option key={o}>{o}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Status PO</label>
-              <select value={editForm.status} onChange={e=>setEditForm(f=>({...f,status:e.target.value}))}
-                style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
-                {['Proses','Diterima','Dibatalkan'].map(o=><option key={o}>{o}</option>)}
-              </select>
-            </div>
-          </div>
-          <div style={{marginBottom:10}}>
-            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Jatuh Tempo</label>
-            <input type="date" value={editForm.due_date} onChange={e=>setEditForm(f=>({...f,due_date:e.target.value}))}
-              style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
-          </div>
-          <div>
-            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Catatan</label>
-            <input value={editForm.notes} onChange={e=>setEditForm(f=>({...f,notes:e.target.value}))}
-              placeholder="Catatan..." style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
-          </div>
-        </div>
-
-        {/* Edit items */}
-        <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:700,fontSize:13}}>🛒 Daftar Barang</div>
-            <button onClick={()=>setItems(prev=>[...prev,{name:'',qty:1,price:0,satuan:'pcs',product_id:null}])}
-              style={{padding:'5px 12px',background:GL,border:`1px solid ${G}`,borderRadius:8,cursor:'pointer',color:GD,fontWeight:700,fontSize:12}}>
-              + Item
-            </button>
-          </div>
-          {items.map((item,i)=>(
-            <div key={i} style={{background:'#F5F6FA',borderRadius:10,padding:10,marginBottom:8}}>
-              <div style={{display:'flex',gap:6,marginBottom:6}}>
-                <input value={item.name} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,name:e.target.value}:it))}
-                  placeholder="Nama barang"
-                  style={{flex:1,padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
-                <button onClick={()=>setItems(prev=>prev.filter((_,j)=>j!==i))}
-                  style={{padding:'7px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,cursor:'pointer',color:RD,fontSize:12}}>🗑️</button>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-                <div>
-                  <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty</label>
-                  <input type="number" value={item.qty} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,qty:parseInt(e.target.value)||0}:it))}
-                    style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,textAlign:'center',boxSizing:'border-box'}}/>
-                </div>
-                <div>
-                  <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Harga Beli</label>
-                  <input type="number" value={item.price} onChange={e=>setItems(prev=>prev.map((it,j)=>j===i?{...it,price:parseInt(e.target.value)||0}:it))}
-                    style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
-                </div>
-              </div>
-              <div style={{fontSize:11,color:GD,fontWeight:700,textAlign:'right',marginTop:5}}>
-                {fmt(item.qty*item.price)}
-              </div>
-            </div>
-          ))}
-          <div style={{display:'flex',justifyContent:'space-between',fontWeight:800,fontSize:15,paddingTop:8,borderTop:`2px solid ${G}`}}>
-            <span>Total Baru</span>
-            <span style={{color:G}}>{fmt(items.reduce((s,i)=>s+i.qty*i.price,0))}</span>
-          </div>
-        </div>
-
-        {/* Notifikasi selisih pembayaran ke supplier */}
-        {(()=>{
-          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
-          const totalLama = selected.total||0;
-          const selisih   = totalBaru - totalLama;
-          if(selisih===0) return null;
-          const isNaik = selisih>0;
-          return (
-            <div style={{
-              marginBottom:12,
-              padding:'12px 14px',
-              background: isNaik?'#FFF3E0':'#E8F5E9',
-              border:`1.5px solid ${isNaik?OR:G}`,
-              borderRadius:10,
-            }}>
-              <div style={{fontWeight:700,fontSize:13,color:isNaik?OR:GD,marginBottom:6}}>
-                {isNaik?'💸 Tagihan ke Supplier Bertambah':'💰 Tagihan ke Supplier Berkurang'}
-              </div>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:3}}>
-                <span style={{color:MT}}>Total lama</span>
-                <span style={{fontWeight:600}}>{fmt(totalLama)}</span>
-              </div>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:6}}>
-                <span style={{color:MT}}>Total baru</span>
-                <span style={{fontWeight:600}}>{fmt(totalBaru)}</span>
-              </div>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:14,paddingTop:6,borderTop:`1px solid ${isNaik?OR:G}`}}>
-                <span style={{fontWeight:700,color:isNaik?OR:GD}}>
-                  {isNaik?'➕ Tambah bayar ke supplier':'➖ Kurang bayar ke supplier'}
-                </span>
-                <span style={{fontWeight:800,fontSize:15,color:isNaik?OR:GD}}>
-                  {fmt(Math.abs(selisih))}
-                </span>
-              </div>
-              <div style={{fontSize:11,color:MT,marginTop:6}}>
-                {isNaik
-                  ? `Hutang ke supplier bertambah ${fmt(Math.abs(selisih))}`
-                  : `Hutang ke supplier berkurang ${fmt(Math.abs(selisih))}`
-                }
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* Print Invoice Revisi PO */}
-        {(()=>{
-          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
-          const totalLama = selected.total||0;
-          if(totalBaru===totalLama) return null;
-          const selisih = totalBaru - totalLama;
-          return (
-            <button onClick={()=>{
-              const toko = window.TOKO_NAMA||'SURYA LISTRIK';
-              const w = window.open('','_blank','width=760,height=680');
-              w.document.write('<!DOCTYPE html><html><head><title>Revisi PO</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:680px;margin:0 auto;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}table{width:100%;border-collapse:collapse;margin:6px 0}th{background:#f5f5f5;padding:6px 8px;text-align:left;font-size:10px;color:#777}td{padding:6px 8px;border-bottom:1px solid #f0f0f0}.added{background:#E8F5E9}.removed{background:#FFEBEE;text-decoration:line-through;color:#999}.box{padding:12px;border-radius:8px;margin:12px 0}@media print{button{display:none}}</style></head><body>'+
-                '<div style="display:flex;justify-content:space-between;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:14px"><div><b style="font-size:16px">'+toko+'</b></div><div style="text-align:right"><b style="font-size:14px;color:#C62828">REVISI PURCHASE ORDER</b><br/>PO-'+selected.id+'<br/>Supplier: '+selected.supplier+'<br/>'+new Date().toLocaleDateString('id-ID')+'</div></div>'+
-                '<div class="grid">'+
-                '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#777">📋 PO LAMA</div><table><thead><tr><th>Barang</th><th>Qty</th><th>Total</th></tr></thead><tbody>'+
-                (selected.items||[]).map(i=>'<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
-                '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;border-top:2px solid #eee">Rp '+totalLama.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
-                '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#1a472a">📋 PO BARU</div><table><thead><tr><th>Barang</th><th>Qty</th><th>Total</th></tr></thead><tbody>'+
-                items.map(i=>{ const isNew=!(selected.items||[]).find(o=>o.name===i.name); return '<tr class="'+(isNew?'added':'')+'"><td>'+i.name+(isNew?' ✨':'')+'</td><td>'+i.qty+'</td><td>Rp '+((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')+'</td></tr>'; }).join('')+
-                (selected.items||[]).filter(o=>!items.find(n=>n.name===o.name)).map(i=>'<tr class="removed"><td>'+i.name+' ❌</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
-                '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;border-top:2px solid #1a472a;color:#1a472a">Rp '+totalBaru.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
-                '</div>'+
-                '<div class="box" style="background:'+(selisih>0?'#FFF3E0':'#E8F5E9')+';border:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
-                '<b style="color:'+(selisih>0?'#E65100':'#1a472a')+';font-size:14px">'+(selisih>0?'💸 TAGIHAN BERTAMBAH':'💰 TAGIHAN BERKURANG')+'</b><br/><br/>'+
-                '<div style="display:flex;justify-content:space-between"><span>Total PO Lama</span><span>Rp '+totalLama.toLocaleString('id-ID')+'</span></div>'+
-                '<div style="display:flex;justify-content:space-between"><span>Total PO Baru</span><span>Rp '+totalBaru.toLocaleString('id-ID')+'</span></div>'+
-                '<div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding-top:8px;border-top:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
-                '<span>'+(selisih>0?'Tambah Bayar':'Kurang Bayar')+'</span><span style="color:'+(selisih>0?'#E65100':'#1a472a')+'">Rp '+Math.abs(selisih).toLocaleString('id-ID')+'</span></div></div>'+
-                '<div style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700">🖨️ Print</button></div>'+
-                '</body></html>');
-              w.document.close(); w.focus();
-            }}
-              style={{width:'100%',padding:10,background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:12,color:'#1976D2',marginBottom:8}}>
-              🖨️ Print Invoice Revisi PO
-            </button>
-          );
-        })()}
-
-        <button onClick={saveEdit} disabled={savingEdit}
-          style={{width:'100%',padding:14,background:savingEdit?MT:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,fontSize:15,cursor:'pointer'}}>
-          {savingEdit?'⏳ Menyimpan...':'💾 Simpan Perubahan'}
-        </button>
-      </div>
-    );
-  }
+  if(view==='detail' && selected && editPO) return (
+    <EditPOView po={selected}
+      onCancel={()=>setEditPO(false)}
+      onSaved={(upd)=>{ setSelected(s=>({...s,...upd})); setEditPO(false); loadOrders(); }}
+    />
+  );
 
   // ── VIEW: DETAIL PO ──
   if(view==='detail' && selected) return (
@@ -7810,24 +8480,52 @@ function Pembelian() {
         🖨️ Print Invoice Pembelian
       </button>
 
+      {/* Form Retur ke Supplier */}
+      {showReturPO&&(
+        <ReturPOForm po={selected}
+          onCancel={()=>setShowReturPO(false)}
+          onDone={({total,items,revisions})=>{
+            setSelected(s=>({...s,total,items,revisions}));
+            setShowReturPO(false);
+            loadOrders();
+          }}/>
+      )}
+
+      {/* Riwayat Revisi PO */}
+      <RiwayatRevisiPO po={selected}/>
+
       {/* Action buttons */}
       <div style={{display:'flex',gap:8,marginBottom:10}}>
-        {selected.status==='Proses'&&(
-          <button onClick={()=>setEditPO(true)}
+        {(selected.status==='Proses'||selected.status==='Diterima')&&(
+          <button onClick={()=>{setEditPO(true);setShowReturPO(false);}}
             style={{flex:1,padding:12,background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:10,fontWeight:700,cursor:'pointer',color:'#1976D2',fontSize:13}}>
             ✏️ Edit PO
           </button>
         )}
+        {selected.status==='Diterima'&&!showReturPO&&(selected.items||[]).length>0&&(
+          <button onClick={()=>setShowReturPO(true)}
+            style={{flex:1,padding:12,background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:10,fontWeight:700,cursor:'pointer',color:RD,fontSize:13}}>
+            ↩️ Retur
+          </button>
+        )}
         <button onClick={async()=>{
-          if(!confirm(`Hapus PO-${selected.id}? Data tidak bisa dikembalikan!`)) return;
+          const perluBalikStok = selected.status==='Diterima'&&(selected.items||[]).length>0;
+          if(!confirm(`Hapus PO-${selected.id}?${perluBalikStok?'\nStok yang sudah masuk dari PO ini akan dikurangi kembali.':''}\nData tidak bisa dikembalikan!`)) return;
           try {
+            // Balikkan stok kalau barang PO sudah diterima
+            if(perluBalikStok) {
+              await adjustStockPO(
+                (selected.items||[]).map(it=>({product_id:it.product_id,name:it.name,satuan:it.satuan,delta:-(parseInt(it.qty)||0)})),
+                selected.id, `Hapus PO-${selected.id} (${selected.supplier})`
+              );
+            }
             const sb = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
             await sb.from('po_items').delete().eq('po_id', selected.id);
             await sb.from('purchase_orders').delete().eq('id', selected.id);
             notifyDataChanged('pembelian');
             loadOrders();
             setView('list');
-            alert('✅ PO berhasil dihapus!');
+            alert(`✅ PO berhasil dihapus!${perluBalikStok?'\nStok sudah disesuaikan kembali.':''}`);
           } catch(e){ alert('Gagal hapus: '+e.message); }
         }}
           style={{flex:1,padding:12,background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:10,fontWeight:700,cursor:'pointer',color:RD,fontSize:13}}>
@@ -8906,7 +9604,7 @@ function ExportData({onBack}) {
         headers = ['ID','Nama','Harga Jual','Harga Beli','Stok','Kategori','Barcode','Tipe'];
         filename = 'produk_surya_listrik.csv';
       } else if(type==='transactions'){
-        data = await sbGet('transactions',{order:'created_at',asc:false});
+        data = await sbGetAll('transactions',{order:'created_at',asc:false});
         headers = ['ID','Invoice','Pelanggan','Total','Bayar','Kembalian','Status','Tanggal'];
         filename = 'transaksi_surya_listrik.csv';
       } else if(type==='stock_low'){
