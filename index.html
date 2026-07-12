@@ -1252,13 +1252,36 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
     // Validasi qty tidak boleh 0
     const invalidQty = cart.filter(i=>(parseInt(i.qty)||0)<=0);
     if(invalidQty.length>0) return alert('Qty tidak boleh 0!\nProduk: '+invalidQty.map(i=>i.name).join(', '));
-    // Validasi stok cukup (skip kalau bypass mode aktif)
+    // Validasi stok cukup — cek FRESH ke database, agregat per produk (skip kalau bypass aktif)
     if(!bypassStok) {
-      const outOfStock = cart.filter(i=>{
+      const needMap = {};
+      cart.forEach(i=>{
+        if(!i.id) return;
         const need = i._unitBesar?(parseInt(i.qty)||0)*(i._konversi||1):(parseInt(i.qty)||0);
-        return need>(i.stock||0);
+        needMap[i.id]=(needMap[i.id]||0)+need;
       });
-      if(outOfStock.length>0) return alert('Stok tidak cukup!\nProduk: '+outOfStock.map(i=>i.name).join(', '));
+      const ids = Object.keys(needMap);
+      if(ids.length){
+        let fresh = null;
+        try {
+          const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+          const { data } = await sbc.from('products').select('id,name,stock,unit_kecil').in('id', ids);
+          fresh = data;
+        } catch(e){}
+        if(Array.isArray(fresh)&&fresh.length){
+          const kurang = fresh.filter(p=>needMap[p.id]>(p.stock||0))
+            .map(p=>`• ${p.name}: butuh ${needMap[p.id]}, stok tersisa ${p.stock||0} ${p.unit_kecil||'pcs'}`);
+          if(kurang.length) return alert('❌ Stok tidak cukup!\n\n'+kurang.join('\n')+'\n\nKurangi jumlah, atau aktifkan bypass stok (🔓) jika stok fisik memang tersedia.');
+          // Segarkan snapshot stok keranjang agar pemotongan stok menulis angka yang benar
+          cart.forEach(i=>{ const f=fresh.find(p=>p.id===i.id); if(f) i.stock=f.stock; });
+        } else {
+          // Fallback (offline): validasi agregat pakai snapshot
+          const snap = {};
+          cart.forEach(i=>{ if(i.id&&!(i.id in snap)) snap[i.id]={name:i.name,stock:i.stock||0}; });
+          const kurang = Object.keys(needMap).filter(id=>needMap[id]>snap[id].stock).map(id=>snap[id].name);
+          if(kurang.length) return alert('Stok tidak cukup!\nProduk: '+kurang.join(', '));
+        }
+      }
     }
     if(statusBayar==='Lunas' && (!paid||paidNum<total)) return alert('Nominal bayar kurang!');
     if(statusBayar==='Piutang' && !customer) return alert('Nama pelanggan wajib diisi untuk piutang!\nPilih pelanggan terdaftar agar piutang bisa ditagih.');
@@ -1899,6 +1922,15 @@ function Transaksi() {
   const addToCartDirect = (product, unit, price) => {
     const cartKey = product.id+'_'+unit;
     setCart(prev=>{
+      // Guard stok: total kebutuhan semua baris produk ini + 1 unit baru
+      if(!bypassStok && product.id){
+        const per   = product._unitBesar?(product._konversi||1):1;
+        const sudah = prev.reduce((s,i)=>i.id===product.id?s+((parseInt(i.qty)||0)*(i._unitBesar?(i._konversi||1):1)):s,0);
+        if(sudah+per>(product.stock||0)){
+          alert(`❌ Stok tidak cukup!\n${product.name}\nStok tersisa: ${product.stock||0} ${product.unit_kecil||'pcs'}${sudah>0?`\nSudah di keranjang: ${sudah}`:''}`);
+          return prev;
+        }
+      }
       const ex=prev.find(i=>i.cartKey===cartKey);
       if(ex) return prev.map(i=>i.cartKey===cartKey?{...i,qty:i.qty+1}:i);
       return [...prev,{...product,cartKey,unit,price,qty:1}];
@@ -1916,7 +1948,20 @@ function Transaksi() {
       addToCartDirect(p,'Pcs',p.price);
     }
   };
-  const updateQty   = (cartKey,d)        => setCart(prev=>prev.map(i=>(i.cartKey||i.id+'_Pcs')===cartKey?{...i,qty:i.qty+d}:i).filter(i=>i.qty>0));
+  const updateQty   = (cartKey,d)        => setCart(prev=>{
+    if(d>0&&!bypassStok){
+      const it = prev.find(i=>(i.cartKey||i.id+'_Pcs')===cartKey);
+      if(it&&it.id){
+        const per   = it._unitBesar?(it._konversi||1):1;
+        const sudah = prev.reduce((s,i)=>i.id===it.id?s+((parseInt(i.qty)||0)*(i._unitBesar?(i._konversi||1):1)):s,0);
+        if(sudah+per>(it.stock||0)){
+          alert(`❌ Stok ${it.name} tidak cukup!\nStok tersisa: ${it.stock||0}, di keranjang sudah: ${sudah}`);
+          return prev;
+        }
+      }
+    }
+    return prev.map(i=>(i.cartKey||i.id+'_Pcs')===cartKey?{...i,qty:i.qty+d}:i).filter(i=>i.qty>0);
+  });
   const updatePrice = (cartKey,newPrice) => setCart(prev=>prev.map(i=>(i.cartKey||i.id)===cartKey?{...i,price:newPrice}:i));
   const clearCart = () => { setCart([]); };
   const getQty = (id) => cart.filter(i=>i.id===id).reduce((s,i)=>s+i.qty,0);
@@ -1972,7 +2017,7 @@ function Transaksi() {
               {/* Juga tampilkan satuan kalau ada */}
               {unitSelector.units.length>0&&<div style={{fontSize:11,color:MT,marginTop:4,marginBottom:8,textAlign:'center'}}>── atau pilih satuan ──</div>}
               {(unitSelector.units||[]).filter(u=>u&&u.id).map(u=>(
-                <button key={u.id} onClick={()=>addToCartDirect(unitSelector.product,u.unit_name,u.price)}
+                <button key={u.id} onClick={()=>addToCartDirect((u.ratio&&u.ratio>1)?{...unitSelector.product,_unitBesar:true,_konversi:u.ratio}:unitSelector.product,u.unit_name,u.price)}
                   style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',background:'#F8F0FF',border:'2px solid #8E44AD',borderRadius:12,cursor:'pointer',marginBottom:8}}>
                   <div style={{fontWeight:700,fontSize:13,color:TX}}>{u.unit_name}</div>
                   <div style={{fontWeight:800,fontSize:14,color:'#8E44AD'}}>{fmt(u.price)}</div>
@@ -2029,7 +2074,7 @@ function Transaksi() {
 
               {/* Unit tambahan dari tabel product_units */}
               {(unitSelector.units||[]).filter(u=>u&&u.id).map(u=>(
-                <button key={u.id} onClick={()=>addToCartDirect(unitSelector.product,u.unit_name,u.price)}
+                <button key={u.id} onClick={()=>addToCartDirect((u.ratio&&u.ratio>1)?{...unitSelector.product,_unitBesar:true,_konversi:u.ratio}:unitSelector.product,u.unit_name,u.price)}
                   style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',background:'#F8F0FF',border:'2px solid #8E44AD',borderRadius:12,cursor:'pointer',marginBottom:8}}>
                   <div style={{textAlign:'left'}}>
                     <div style={{fontWeight:700,fontSize:14,color:TX}}>{u.unit_name}</div>
