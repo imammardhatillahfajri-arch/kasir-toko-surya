@@ -1,15 +1,28 @@
-const CACHE_NAME = 'kasir-surya-v1';
-const CACHE_TIMEOUT = 7 * 24 * 60 * 60 * 1000; // 7 hari
+const CACHE_NAME = 'kasir-surya-v2';
+const NETWORK_TIMEOUT = 4000; // 4 detik — kalau jaringan lelet, pakai cache dulu
 
 // Asset yang di-cache saat install
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
+  '/manifest.json',
+  '/icons/icon-72.png',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
   'https://unpkg.com/react@18/umd/react.production.min.js',
   'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone/babel.min.js',
+  'https://unpkg.com/@babel/standalone@7.26.4/babel.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js',
 ];
+
+// Fetch dengan batas waktu — kalau lewat, reject supaya fallback ke cache
+function fetchWithTimeout(request, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('network timeout')), ms);
+    fetch(request).then(res => { clearTimeout(timer); resolve(res); },
+                        err => { clearTimeout(timer); reject(err); });
+  });
+}
 
 // Install - cache semua assets utama
 self.addEventListener('install', event => {
@@ -40,7 +53,7 @@ self.addEventListener('activate', event => {
 });
 
 // Fetch strategy:
-// - index.html → Network first (selalu ambil update terbaru)
+// - index.html → Network first + timeout 4s (selalu ambil update terbaru, tapi tidak menggantung di sinyal jelek)
 // - CDN libs   → Cache first (hemat bandwidth)
 // - Supabase   → Network only (data harus realtime)
 self.addEventListener('fetch', event => {
@@ -52,13 +65,15 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // index.html → network first, fallback cache
+  // index.html → network first (dengan timeout), fallback cache
   if (url.pathname === '/' || url.pathname === '/index.html') {
     event.respondWith(
-      fetch(event.request)
+      fetchWithTimeout(event.request, NETWORK_TIMEOUT)
         .then(res => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          if (event.request.method === 'GET' && res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          }
           return res;
         })
         .catch(() => caches.match('/index.html'))
@@ -72,8 +87,10 @@ self.addEventListener('fetch', event => {
       caches.match(event.request).then(cached => {
         if (cached) return cached;
         return fetch(event.request).then(res => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          if (event.request.method === 'GET' && res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          }
           return res;
         });
       })
@@ -81,7 +98,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Default → network first
+  // Default → network first, fallback cache
   event.respondWith(
     fetch(event.request).catch(() => caches.match(event.request))
   );
