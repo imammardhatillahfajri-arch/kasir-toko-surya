@@ -1162,7 +1162,7 @@ function ItemModal({item, onClose, onUpdate, onRemove}) {
 
 
 // ── Panel Kanan: Keranjang + Bayar ─────────────────────────────────────────
-function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess, reload}) {
+function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess, reload, bypassStok=false, onBypassChange}) {
   const [itemModal, setItemModal] = useState(null); // item yang sedang diedit
   const [paid, setPaid] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1601,15 +1601,29 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
           </div>
         )}
 
-        {/* Bypass stok warning */}
-        {bypassStok&&(
-          <div style={{marginBottom:8,padding:'8px 12px',background:'#FFF3E0',border:`1.5px solid ${OR}`,borderRadius:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div>
-              <div style={{fontSize:11,fontWeight:700,color:OR}}>🔓 Bypass Stok AKTIF</div>
-              <div style={{fontSize:10,color:'#7d4e00'}}>Stok tidak dicek saat transaksi!</div>
+        {/* Bypass stok toggle + warning */}
+        <div style={{padding:'8px 14px 0'}}>
+          {bypassStok ? (
+            <div style={{padding:'8px 12px',background:'#FFF3E0',border:`1.5px solid ${OR}`,borderRadius:8,display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:700,color:OR}}>🔓 Bypass Stok AKTIF</div>
+                <div style={{fontSize:10,color:'#7d4e00'}}>Stok tidak dicek — barang mungkin kosong!</div>
+              </div>
+              <button onClick={()=>onBypassChange&&onBypassChange(false)}
+                style={{padding:'4px 10px',background:OR,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontSize:10,fontWeight:700,flexShrink:0}}>
+                Nonaktifkan
+              </button>
             </div>
-          </div>
-        )}
+          ) : (
+            <button onClick={()=>{
+              if(confirm('⚠️ Aktifkan bypass stok?\nStok tidak akan dicek. Gunakan hanya jika stok belum terupdate!'))
+                onBypassChange&&onBypassChange(true);
+            }}
+              style={{width:'100%',padding:'6px 0',background:'#F5F6FA',border:'1.5px solid #eee',borderRadius:8,cursor:'pointer',fontSize:11,color:MT,fontWeight:600,marginBottom:6}}>
+              🔒 Cek Stok Aktif — Klik untuk Bypass
+            </button>
+          )}
+        </div>
 
         {/* Tombol Bayar */}
         <button onClick={processPayment}
@@ -2151,7 +2165,7 @@ function Transaksi() {
               <button onClick={()=>setShowMobileCart(false)} style={{background:'#eee',border:'none',borderRadius:'50%',width:30,height:30,cursor:'pointer',fontSize:16,fontWeight:700}}>×</button>
             </div>
             <div style={{flex:1,overflowY:'auto'}}>
-              <PanelKanan cart={cart} setCart={setCart} updateQty={updateQty} updatePrice={updatePrice} clearCart={()=>{clearCart();setShowMobileCart(false);}} reload={load} onSuccess={()=>setShowMobileCart(false)} bypassStok={bypassStok}/>
+              <PanelKanan cart={cart} setCart={setCart} updateQty={updateQty} updatePrice={updatePrice} clearCart={()=>{clearCart();setShowMobileCart(false);}} reload={load} onSuccess={()=>setShowMobileCart(false)} bypassStok={bypassStok} onBypassChange={setBypassStok}/>
             </div>
           </div>
         </div>
@@ -2168,6 +2182,7 @@ function Transaksi() {
           reload={load}
           onSuccess={()=>{}}
           bypassStok={bypassStok}
+          onBypassChange={setBypassStok}
         />
       </div>
     </div>
