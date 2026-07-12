@@ -4755,10 +4755,20 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
     try { setProducts(await sbGetAll('products',{order:'name'})); } catch(e){}
   };
 
+  const [totalRetur, setTotalRetur] = useState(0);
+
   const search = async() => {
     if(!filter.dari||!filter.sampai) return alert('Pilih tanggal terlebih dahulu!');
     setLoading(true); setSelected(null); setEditMode(false);
     try {
+      // Retur pelanggan dalam periode (pengurang omset)
+      try {
+        const rets = await sbGetAll('returns',{order:'created_at',asc:false});
+        setTotalRetur(rets.filter(r=>{
+          const tgl = r.created_at?.slice(0,10);
+          return tgl>=filter.dari&&tgl<=filter.sampai&&r.type!=='ke_supplier';
+        }).reduce((s,r)=>s+(r.total||0),0));
+      } catch(e){ setTotalRetur(0); }
       const all = await sbGetAll('transactions',{order:'created_at',asc:false});
       const filtered = all.filter(t=>{
         const tgl = t.created_at?.slice(0,10);
@@ -4957,12 +4967,13 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
           <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:14}}>
             {[
               {label:'Total Transaksi',value:transactions.length+' tx',color:'#3498DB'},
-              {label:'Total Omset',value:fmt(totalOmset),color:G},
+              {label:totalRetur>0?'Omset Neto':'Total Omset',value:fmt(totalOmset-totalRetur),color:G,sub:totalRetur>0?`Bruto ${fmt(totalOmset)} − Retur ${fmt(totalRetur)}`:null},
               {label:'Total Piutang',value:fmt(totalPiutang),color:OR},
             ].map((s,i)=>(
               <div key={i} style={{background:'#fff',borderRadius:10,padding:'10px 14px',boxShadow:'0 1px 4px rgba(0,0,0,0.07)',borderLeft:`3px solid ${s.color}`}}>
                 <div style={{fontSize:11,color:MT}}>{s.label}</div>
                 <div style={{fontSize:16,fontWeight:800,color:s.color,marginTop:2}}>{s.value}</div>
+                {s.sub&&<div style={{fontSize:10,color:MT,marginTop:2}}>{s.sub}</div>}
               </div>
             ))}
           </div>
@@ -5711,10 +5722,12 @@ function LaporanLabaRugi({period}) {
         since.setDate(since.getDate()-days);
         const sinceStr = since.toISOString();
 
-        const [txs, items, prods] = await Promise.all([
+        const [txs, items, prods, rets, retItems] = await Promise.all([
           sbGetAll('transactions',{order:'created_at'}),
           sbGetAll('transaction_items',{order:'id'}),
           sbGetAll('products',{select:'id,name,buy_price,price',order:'name'}),
+          sbGetAll('returns',{order:'created_at'}).catch(()=>[]),
+          sbGetAll('return_items',{order:'id'}).catch(()=>[]),
         ]);
 
         const prodMap = {};
@@ -5734,6 +5747,20 @@ function LaporanLabaRugi({period}) {
           barangMap[i.product_name].modal += buyPrice * i.qty;
           barangMap[i.product_name].laba  += (i.price - buyPrice) * i.qty;
         });
+        // Retur pelanggan mengurangi angka per barang
+        const validRets = rets.filter(r=>r.created_at>=sinceStr&&r.type!=='ke_supplier');
+        const validRetIds = new Set(validRets.map(r=>r.id));
+        const filteredRetItems = retItems.filter(ri=>validRetIds.has(ri.return_id));
+        filteredRetItems.forEach(ri=>{
+          const buyPrice = prodMap[ri.product_name]?.buy_price || 0;
+          const b = barangMap[ri.product_name];
+          if(b){
+            b.qty   -= ri.qty;
+            b.omset -= ri.price * ri.qty;
+            b.modal -= buyPrice * ri.qty;
+            b.laba  -= (ri.price - buyPrice) * ri.qty;
+          }
+        });
         setDataBarang(Object.values(barangMap).sort((a,b)=>b.laba-a.laba));
 
         // Per hari
@@ -5752,6 +5779,17 @@ function LaporanLabaRugi({period}) {
             hariMap[key].omset += i.price * i.qty;
             hariMap[key].modal += buyPrice * i.qty;
             hariMap[key].laba  += (i.price - buyPrice) * i.qty;
+          }
+        });
+        // Retur pelanggan mengurangi angka per hari
+        filteredRetItems.forEach(ri=>{
+          const ret = validRets.find(r=>r.id===ri.return_id);
+          const key = ret?.created_at?.slice(0,10);
+          if(key && hariMap[key]) {
+            const buyPrice = prodMap[ri.product_name]?.buy_price || 0;
+            hariMap[key].omset -= ri.price * ri.qty;
+            hariMap[key].modal -= buyPrice * ri.qty;
+            hariMap[key].laba  -= (ri.price - buyPrice) * ri.qty;
           }
         });
         setDataPeriode(Object.values(hariMap));
@@ -5902,11 +5940,12 @@ function RingkasanPenjualan({period, onBack}) {
       else if(periode==='bulan')    { dari=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10); sampai=today; }
       else if(periode==='custom')   { dari=customFrom; sampai=customTo; }
 
-      const [txs, items, prods, yestTxs] = await Promise.all([
+      const [txs, items, prods, rets, retItems] = await Promise.all([
         sbGetAll('transactions',{order:'created_at',asc:false}),
         sbGetAll('transaction_items',{order:'id'}),
         sbGetAll('products',{select:'id,stock,buy_price',order:'id'}),
-        sbGetAll('transactions',{order:'created_at',asc:false}),
+        sbGetAll('returns',{order:'created_at',asc:false}).catch(()=>[]),
+        sbGetAll('return_items',{order:'id'}).catch(()=>[]),
       ]);
 
       const filterTx = (txList, d1, d2) => txList.filter(t=>{
@@ -5917,8 +5956,18 @@ function RingkasanPenjualan({period, onBack}) {
       const txPeriode  = filterTx(txs, dari, sampai);
       const txKemarin  = filterTx(txs, yesterday, yesterday);
 
-      const omset      = txPeriode.reduce((s,t)=>s+t.total,0);
-      const omsetKem   = txKemarin.reduce((s,t)=>s+t.total,0);
+      // Retur pelanggan = pengurang omset & HPP
+      const filterRet = (list,d1,d2)=>list.filter(r=>{
+        const tgl = r.created_at?.slice(0,10);
+        return tgl>=d1&&tgl<=d2&&r.type!=='ke_supplier';
+      });
+      const retPeriode = filterRet(rets,dari,sampai);
+      const retKemarin = filterRet(rets,yesterday,yesterday);
+      const returTotal    = retPeriode.reduce((s,r)=>s+(r.total||0),0);
+      const returTotalKem = retKemarin.reduce((s,r)=>s+(r.total||0),0);
+
+      const omset      = txPeriode.reduce((s,t)=>s+t.total,0) - returTotal;
+      const omsetKem   = txKemarin.reduce((s,t)=>s+t.total,0) - returTotalKem;
       const jumlahTx   = txPeriode.length;
       const jumlahKem  = txKemarin.length;
 
@@ -5926,8 +5975,11 @@ function RingkasanPenjualan({period, onBack}) {
       const txIds = new Set(txPeriode.map(t=>t.id));
       const prodMap = {};
       prods.forEach(p=>{ prodMap[p.id]=p.buy_price||0; });
+      const retIds = new Set(retPeriode.map(r=>r.id));
+      const returHPP = retItems.filter(ri=>retIds.has(ri.return_id))
+        .reduce((s,ri)=>s+(prodMap[ri.product_id]||0)*ri.qty,0);
       const hpp = items.filter(i=>txIds.has(i.transaction_id))
-        .reduce((s,i)=>s+(prodMap[i.product_id]||0)*i.qty,0);
+        .reduce((s,i)=>s+(prodMap[i.product_id]||0)*i.qty,0) - returHPP;
       const laba = omset - hpp;
 
       // Sisa modal = total stok * harga beli
@@ -6091,10 +6143,12 @@ function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
         sampai = today;
       }
 
-      const [txs, items, prods] = await Promise.all([
+      const [txs, items, prods, rets, retItems] = await Promise.all([
         sbGetAll('transactions',{order:'created_at',asc:false}),
         sbGetAll('transaction_items',{order:'id'}),
         sbGetAll('products',{select:'id,buy_price',order:'id'}),
+        sbGetAll('returns',{order:'created_at',asc:false}).catch(()=>[]),
+        sbGetAll('return_items',{order:'id'}).catch(()=>[]),
       ]);
 
       const prodMap = {};
@@ -6110,8 +6164,18 @@ function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
       const txIds = new Set(txPeriode.map(t=>t.id));
       const filteredItems = items.filter(i=>txIds.has(i.transaction_id));
 
-      const totalPenjualan = txPeriode.filter(t=>t.status==='Lunas').reduce((s,t)=>s+t.total,0);
-      const hpp = filteredItems.reduce((s,i)=>s+(prodMap[i.product_id]||0)*i.qty,0);
+      // Retur pelanggan dalam periode
+      const retPeriode = rets.filter(r=>{
+        const tgl = r.created_at?.slice(0,10);
+        return tgl>=dari&&tgl<=sampai&&r.type!=='ke_supplier';
+      });
+      const retIdSet = new Set(retPeriode.map(r=>r.id));
+      const returTotal = retPeriode.reduce((s,r)=>s+(r.total||0),0);
+      const returHPP = retItems.filter(ri=>retIdSet.has(ri.return_id))
+        .reduce((s,ri)=>s+(prodMap[ri.product_id]||0)*ri.qty,0);
+
+      const totalPenjualan = txPeriode.filter(t=>t.status==='Lunas').reduce((s,t)=>s+t.total,0) - returTotal;
+      const hpp = filteredItems.reduce((s,i)=>s+(prodMap[i.product_id]||0)*i.qty,0) - returHPP;
       const labaBersih = totalPenjualan - hpp;
 
       // Per hari
@@ -6134,6 +6198,23 @@ function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
             if(row) row.hpp += h;
           }
         }
+      });
+      // Retur pelanggan: kurangi angka hari terkait + tampilkan sebagai baris merah
+      retPeriode.forEach(r=>{
+        const tgl = r.created_at?.slice(0,10);
+        if(!hariMap[tgl]) hariMap[tgl]={date:tgl,omset:0,hpp:0,tx:0,txList:[]};
+        const hppR = retItems.filter(ri=>ri.return_id===r.id)
+          .reduce((s,ri)=>s+(prodMap[ri.product_id]||0)*ri.qty,0);
+        hariMap[tgl].omset -= (r.total||0);
+        hariMap[tgl].hpp   -= hppR;
+        hariMap[tgl].txList.push({
+          id:null,
+          invoice:'↩️ '+(r.return_no||'RETUR'),
+          customer:r.customer||'Retur pelanggan',
+          total:-(r.total||0),
+          status:'Retur',
+          hpp:-hppR,
+        });
       });
 
       setData({
