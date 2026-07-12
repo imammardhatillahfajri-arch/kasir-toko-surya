@@ -4756,19 +4756,30 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
   };
 
   const [totalRetur, setTotalRetur] = useState(0);
+  const [retMap, setRetMap] = useState({}); // transaction_id -> {total, list:[retur]}
 
   const search = async() => {
     if(!filter.dari||!filter.sampai) return alert('Pilih tanggal terlebih dahulu!');
     setLoading(true); setSelected(null); setEditMode(false);
     try {
-      // Retur pelanggan dalam periode (pengurang omset)
+      // Retur pelanggan: pengurang omset + penanda per invoice
       try {
         const rets = await sbGetAll('returns',{order:'created_at',asc:false});
-        setTotalRetur(rets.filter(r=>{
+        const custRets = rets.filter(r=>r.type!=='ke_supplier');
+        setTotalRetur(custRets.filter(r=>{
           const tgl = r.created_at?.slice(0,10);
-          return tgl>=filter.dari&&tgl<=filter.sampai&&r.type!=='ke_supplier';
+          return tgl>=filter.dari&&tgl<=filter.sampai;
         }).reduce((s,r)=>s+(r.total||0),0));
-      } catch(e){ setTotalRetur(0); }
+        // Peta retur per transaksi (semua periode, biar invoice lama pun bertanda)
+        const m = {};
+        custRets.forEach(r=>{
+          if(!r.transaction_id) return;
+          if(!m[r.transaction_id]) m[r.transaction_id]={total:0,list:[]};
+          m[r.transaction_id].total += (r.total||0);
+          m[r.transaction_id].list.push(r);
+        });
+        setRetMap(m);
+      } catch(e){ setTotalRetur(0); setRetMap({}); }
       const all = await sbGetAll('transactions',{order:'created_at',asc:false});
       const filtered = all.filter(t=>{
         const tgl = t.created_at?.slice(0,10);
@@ -5013,6 +5024,11 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                       <div style={{textAlign:'right',flexShrink:0}}>
                         <div style={{fontWeight:700,fontSize:13,color:G}}>{fmt(tx.total)}</div>
                         <div style={{fontSize:10,fontWeight:600,color:tx.status==='Lunas'?GD:OR,marginTop:2}}>{tx.status}</div>
+                        {retMap[tx.id]&&(
+                          <div style={{fontSize:9,fontWeight:700,color:RD,background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:5,padding:'1px 6px',marginTop:3,display:'inline-block'}}>
+                            ↩️ {retMap[tx.id].total>=tx.total?'RETUR PENUH':`Retur ${fmt(retMap[tx.id].total)}`}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -5028,7 +5044,14 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                     {/* Header detail */}
                     <div style={{padding:'12px 16px',borderBottom:'1px solid #eee',display:'flex',justifyContent:'space-between',alignItems:'center',background:'#F5F6FA'}}>
                       <div>
-                        <div style={{fontWeight:800,fontSize:15,fontFamily:'monospace'}}>{selected.invoice_no}</div>
+                        <div style={{fontWeight:800,fontSize:15,fontFamily:'monospace'}}>
+                          {selected.invoice_no}
+                          {retMap[selected.id]&&(
+                            <span style={{fontSize:10,fontWeight:800,color:'#fff',background:RD,borderRadius:5,padding:'2px 8px',marginLeft:8,verticalAlign:'middle',fontFamily:'inherit'}}>
+                              ↩️ {retMap[selected.id].total>=selected.total?'RETUR PENUH':'ADA RETUR'}
+                            </span>
+                          )}
+                        </div>
                         <div style={{fontSize:11,color:MT,marginTop:2}}>{selected.created_at?.slice(0,10)} · {selected.customer||'Umum'}</div>
                       </div>
                       <div style={{display:'flex',gap:6}}>
@@ -5072,6 +5095,25 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                     <div style={{padding:16,maxHeight:'60vh',overflowY:'auto'}}>
                       {!editMode&&!showReturForm&&(
                         <>
+                          {/* Riwayat retur invoice ini */}
+                          {retMap[selected.id]&&(
+                            <div style={{background:'#FFF0F0',border:`1.5px solid ${RD}`,borderRadius:10,padding:'10px 14px',marginBottom:14}}>
+                              <div style={{fontWeight:800,fontSize:12,color:RD,marginBottom:6}}>
+                                ↩️ INVOICE INI MEMILIKI RETUR — total {fmt(retMap[selected.id].total)}
+                                {retMap[selected.id].total>=selected.total?' (retur penuh, seluruh barang dikembalikan)':''}
+                              </div>
+                              {retMap[selected.id].list.map((r,ri)=>(
+                                <div key={ri} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:11,padding:'4px 0',borderTop:ri>0?'1px dashed #f3caca':'none'}}>
+                                  <div style={{flex:1,minWidth:0}}>
+                                    <span style={{fontFamily:'monospace',fontWeight:700}}>{r.return_no}</span>
+                                    <span style={{color:MT}}> · {r.created_at?.slice(0,10)} · {r.reason||'-'}{r.action==='refund'?' · 💵 Refund':r.action==='tukar'?' · 🔄 Tukar barang':''}</span>
+                                  </div>
+                                  <span style={{fontWeight:700,color:RD,flexShrink:0,marginLeft:8}}>-{fmt(r.total||0)}</span>
+                                </div>
+                              ))}
+                              <div style={{fontSize:10,color:MT,marginTop:6}}>Nilai transaksi di bawah adalah nilai asli sebelum retur. Omset & laba di laporan sudah otomatis dikurangi.</div>
+                            </div>
+                          )}
                           {/* Info transaksi */}
                           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
                             {[
