@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v13.07.2026-PWA";
+const APP_VERSION = "v14.07.2026-FIX4";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -1311,7 +1311,8 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
       });
       await sbInsert('transaction_items',cart.map(item=>({
         transaction_id:tx.id,product_id:item.id,
-        product_name:item.name,price:item.price,qty:item.qty
+        product_name:item.name,price:item.price,qty:item.qty,
+        satuan:item.unit||'pcs'
       })));
       // Catat arus kas masuk (basis tanggal uang diterima)
       if(statusBayar==='Lunas') await catatPembayaran({transaction_id:tx.id, amount:total, method:metodeBayar, note:`Penjualan ${inv}`});
@@ -1928,7 +1929,7 @@ function Transaksi() {
     const matchBrand  = activeSub==='Semua'   || activeBrand==='Semua' || getBrand(p.category)===activeBrand;
     // Search selalu ikut filter kategori yang aktif
     return matchSearch && matchMain && matchSub && matchBrand;
-  });
+  }).sort((a,b)=>search?smartScore(search,b.name)-smartScore(search,a.name):0);
 
   const addToCartDirect = (product, unit, price) => {
     const cartKey = product.id+'_'+unit;
@@ -3360,7 +3361,7 @@ function HutangPiutang() {
   // ── STRUK PIUTANG VIEW — pakai StrukSukses sama seperti transaksi penjualan ──
   if(showStruk && selectedInvoice) return (
     <StrukSukses
-      cart={txItems.map(i=>({...i,name:i.product_name,unit:i.unit||'pcs',cartKey:i.id}))}
+      cart={txItems.map(i=>({...i,name:i.product_name,unit:i.satuan||i.unit||'pcs',cartKey:i.id}))}
       total={selectedInvoice.total}
       paidNum={selectedInvoice.paid||0}
       invoice={selectedInvoice.invoice_no}
@@ -5008,6 +5009,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
         qty: parseInt(i.qty),
         price: parseInt(i.price),
         subtotal: parseInt(i.qty)*parseInt(i.price),
+        satuan: i.satuan||'pcs',
       })));
 
       // ── Sesuaikan stok sesuai perubahan item ──
@@ -5313,7 +5315,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                               {txItems.map((item,i)=>(
                                 <tr key={i} style={{borderBottom:'1px solid #f5f5f5'}}>
                                   <td style={{padding:'6px 8px',fontWeight:500}}>{item.product_name}</td>
-                                  <td style={{padding:'6px 8px',textAlign:'center'}}>{item.qty} pcs</td>
+                                  <td style={{padding:'6px 8px',textAlign:'center'}}>{item.qty} {item.satuan||'pcs'}</td>
                                   <td style={{padding:'6px 8px',textAlign:'right'}}>{fmt(item.price)}</td>
                                   <td style={{padding:'6px 8px',textAlign:'right',fontWeight:700,color:G}}>{fmt(item.price*item.qty)}</td>
                                 </tr>
@@ -5453,7 +5455,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                                   <table>
                                     <thead><tr><th>Produk</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead>
                                     <tbody>
-                                      ${oldItms.map(i=>`<tr><td>${i.product_name||i.name}</td><td>${i.qty}</td><td style="text-align:right">Rp ${((i.qty||0)*(i.price||0)).toLocaleString('id-ID')}</td></tr>`).join('')}
+                                      ${oldItms.map(i=>`<tr><td>${i.product_name||i.name}</td><td>${i.qty} ${i.satuan||''}</td><td style="text-align:right">Rp ${((i.qty||0)*(i.price||0)).toLocaleString('id-ID')}</td></tr>`).join('')}
                                       <tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;text-align:right;border-top:2px solid #eee">Rp ${oldTot.toLocaleString('id-ID')}</td></tr>
                                     </tbody>
                                   </table>
@@ -5465,9 +5467,9 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                                     <tbody>
                                       ${newItms.map(i=>{
                                         const isNew=!oldItms.find(o=>o.product_id===i.product_id);
-                                        return `<tr class="${isNew?'added':''}"><td>${i.product_name}${isNew?' ✨':''}</td><td>${i.qty}</td><td style="text-align:right">Rp ${((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')}</td></tr>`;
+                                        return `<tr class="${isNew?'added':''}"><td>${i.product_name}${isNew?' ✨':''}</td><td>${i.qty} ${i.satuan||''}</td><td style="text-align:right">Rp ${((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')}</td></tr>`;
                                       }).join('')}
-                                      ${oldItms.filter(o=>!newItms.find(n=>n.product_id===o.product_id)).map(i=>`<tr class="removed"><td>${i.product_name||i.name} ❌</td><td>${i.qty}</td><td style="text-align:right">Rp ${((i.qty||0)*(i.price||0)).toLocaleString('id-ID')}</td></tr>`).join('')}
+                                      ${oldItms.filter(o=>!newItms.find(n=>n.product_id===o.product_id)).map(i=>`<tr class="removed"><td>${i.product_name||i.name} ❌</td><td>${i.qty} ${i.satuan||''}</td><td style="text-align:right">Rp ${((i.qty||0)*(i.price||0)).toLocaleString('id-ID')}</td></tr>`).join('')}
                                       <tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;text-align:right;border-top:2px solid #1a472a;color:#1a472a">Rp ${newTot.toLocaleString('id-ID')}</td></tr>
                                     </tbody>
                                   </table>
@@ -5611,7 +5613,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
       {/* Struk cetak ulang */}
       {showStruk&&selected&&(
         <StrukSukses
-          cart={txItems.map(i=>({...i,name:i.product_name,unit:i.unit||'pcs',cartKey:i.id}))}
+          cart={txItems.map(i=>({...i,name:i.product_name,unit:i.satuan||i.unit||'pcs',cartKey:i.id}))}
           total={selected.total}
           paidNum={selected.paid||selected.total}
           invoice={selected.invoice_no}
@@ -5664,6 +5666,7 @@ function ReturInlineForm({transaction, txItems, onDone}) {
         await sbInsert('return_items', items.map(i=>({
           return_id:retId, product_id:i.product_id||null,
           product_name:i.product_name,
+          satuan:i.satuan||'pcs',
           qty:selectedItems[i.id]?.qty||i.qty,
           price:selectedItems[i.id]?.price||i.price,
           reason,
@@ -5806,7 +5809,8 @@ function ReturFromInvoice() {
       if(retId) {
         await sbInsert('return_items', returItems.map(i=>({
           return_id:retId, product_id:i.product_id||null,
-          product_name:i.product_name, qty:selectedItems[i.id]?.qty||i.qty,
+          product_name:i.product_name, satuan:i.satuan||'pcs',
+          qty:selectedItems[i.id]?.qty||i.qty,
           price:selectedItems[i.id]?.price||i.price, reason,
         })));
         // Kembalikan stok — barang rusak/cacat tidak masuk stok jual
@@ -6826,7 +6830,7 @@ function LaporanPembelian({onBack}) {
             {(selected.items||[]).map((item,i)=>(
               <tr key={i} style={{borderBottom:'1px solid #f5f5f5'}}>
                 <td style={{padding:'6px 8px',fontWeight:500}}>{item.name}</td>
-                <td style={{padding:'6px 8px',textAlign:'center'}}>{item.qty}</td>
+                <td style={{padding:'6px 8px',textAlign:'center'}}>{item.qty} {item.satuan||'pcs'}</td>
                 <td style={{padding:'6px 8px',textAlign:'right'}}>{fmt(item.price)}</td>
                 <td style={{padding:'6px 8px',textAlign:'right',fontWeight:700,color:G}}>{fmt(item.qty*item.price)}</td>
               </tr>
@@ -7584,7 +7588,7 @@ Harga jual saran: ${fmt(saran20)}`)) return;
                   try {
                     const [newProd] = await sbInsert('products',[{
                       name:      namaProduk,
-                      price:     markup20,
+                      price:     saran20,
                       buy_price: hargaBeli,
                       stock:     0,
                       category:  'Lainnya',
@@ -7752,15 +7756,48 @@ Harga jual saran: ${fmt(saran20)}`)) return;
 
 
 // ── PEMBELIAN ──────────────────────────────────────────────────────────────
-// ── Helper: pencarian pintar (multi-kata AND, abaikan simbol/tanda kutip) ───
-// "kawat petak 1x1" cocok dengan 'KAWAT PETAK 1"X1"90CM', tapi tidak dengan kawat lain
+// ── Helper: pencarian pintar (multi-kata AND, abaikan simbol, toleran typo) ─
+// "kawat petak 1x1" cocok dengan 'KAWAT PETAK 1"X1"90CM'; "kabel" tetap ketemu walau diketik "kabel"/"kable"
+function lev1(a,b){ // beda maksimal 1 huruf (insert/delete/ganti)
+  if(a===b) return true;
+  const la=a.length, lb=b.length;
+  if(Math.abs(la-lb)>1) return false;
+  let i=0,j=0,diff=0;
+  while(i<la&&j<lb){
+    if(a[i]===b[j]){i++;j++;continue;}
+    if(++diff>1) return false;
+    if(la>lb) i++; else if(lb>la) j++; else {i++;j++;}
+  }
+  return diff+(la-i)+(lb-j)<=1;
+}
 function smartMatch(query, ...fields) {
   const q = (query||'').toLowerCase().trim();
   if(!q) return true;
   const haySpaced = fields.join(' ').toLowerCase().replace(/[^a-z0-9]+/g,' ');
   const haySquash = fields.join(' ').toLowerCase().replace(/[^a-z0-9]+/g,'');
+  const words = haySpaced.split(' ').filter(Boolean);
   return q.replace(/[^a-z0-9]+/g,' ').split(' ').filter(Boolean)
-    .every(t => haySpaced.includes(t) || haySquash.includes(t));
+    .every(t =>
+      haySpaced.includes(t) || haySquash.includes(t) ||
+      (t.length>=5 && words.some(w => lev1(t,w) || (w.length>t.length && lev1(t, w.slice(0,t.length)))))
+    );
+}
+// Skor relevansi untuk mengurutkan hasil pencarian
+function smartScore(query, name) {
+  const norm = s => (s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const q = norm(query); if(!q) return 0;
+  const n = norm(name);
+  if(n===q) return 1000;
+  let s = 0;
+  if(n.startsWith(q)) s += 500;
+  const nw = n.split(' ');
+  q.split(' ').forEach(t=>{
+    if(nw.includes(t)) s += 60;               // kata persis
+    else if(nw.some(w=>w.startsWith(t))) s += 40; // awalan kata
+    else if(n.includes(t)) s += 20;            // substring
+    else s += 5;                               // cocok via squash/typo
+  });
+  return s;
 }
 
 // ── Helper: catat arus kas ke tabel payments (basis tanggal uang berpindah) ─
@@ -7897,7 +7934,7 @@ function printRevisiPO(po, rev) {
     '<div class="grid">'+
     '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#777">📋 INVOICE LAMA</div>'+
     '<table><thead><tr><th>Barang</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead><tbody>'+
-    (rev.itemsLama||[]).map(function(i){return '<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';}).join('')+
+    (rev.itemsLama||[]).map(function(i){return '<tr><td>'+i.name+'</td><td>'+i.qty+' '+(i.satuan||'')+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';}).join('')+
     '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;text-align:right;border-top:2px solid #eee">Rp '+(rev.totalLama||0).toLocaleString('id-ID')+'</td></tr>'+
     '</tbody></table></div>'+
     '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#1a472a">📋 INVOICE BARU</div>'+
@@ -7905,7 +7942,7 @@ function printRevisiPO(po, rev) {
     (rev.itemsBaru||[]).map(function(i){
       const old=(rev.itemsLama||[]).find(function(o){return o.name===i.name;});
       const cls=!old?'added':(old.qty!==i.qty?'added':'');
-      return '<tr class="'+cls+'"><td>'+i.name+(!old?' ✨':'')+'</td><td>'+i.qty+(old&&old.qty!==i.qty?' <span style="color:#999;font-size:9px">(dari '+old.qty+')</span>':'')+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';
+      return '<tr class="'+cls+'"><td>'+i.name+(!old?' ✨':'')+'</td><td>'+i.qty+' '+(i.satuan||'')+(old&&old.qty!==i.qty?' <span style="color:#999;font-size:9px">(dari '+old.qty+')</span>':'')+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';
     }).join('')+
     (rev.itemsLama||[]).filter(function(o){return !(rev.itemsBaru||[]).find(function(n){return n.name===o.name;});}).map(function(i){
       return '<tr class="removed"><td>'+i.name+' ❌</td><td>'+i.qty+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';
@@ -7915,7 +7952,7 @@ function printRevisiPO(po, rev) {
     (isRetur&&(rev.itemsRetur||[]).length?
       '<div style="font-weight:700;font-size:11px;margin:10px 0 4px;color:#C62828">↩️ BARANG YANG DIRETUR</div>'+
       '<table><thead><tr><th>Barang</th><th>Qty Retur</th><th style="text-align:right">Nilai</th></tr></thead><tbody>'+
-      rev.itemsRetur.map(function(i){return '<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';}).join('')+
+      rev.itemsRetur.map(function(i){return '<tr><td>'+i.name+'</td><td>'+i.qty+' '+(i.satuan||'')+'</td><td style="text-align:right">Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>';}).join('')+
       '</tbody></table>':'')+
     '<div class="box" style="background:'+(selisih>0?'#FFF3E0':'#E8F5E9')+';border:2px solid '+(selisih>0?'#F57C00':'#2e7d32')+'">'+
     '<b style="color:'+(selisih>0?'#E65100':'#1a472a')+';font-size:14px">'+(selisih>0?'💸 TAGIHAN BERTAMBAH':'💰 TAGIHAN BERKURANG')+'</b><br/><br/>'+
@@ -7972,9 +8009,9 @@ function ReturPOForm({po, onDone, onCancel}) {
         totalLama: po.total||0,
         totalBaru: newTotal,
         totalRetur,
-        itemsLama: items.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price||0})),
-        itemsBaru: newItems.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price||0})),
-        itemsRetur: returItems.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price})),
+        itemsLama: items.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price||0,satuan:i2.satuan||'pcs'})),
+        itemsBaru: newItems.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price||0,satuan:i2.satuan||'pcs'})),
+        itemsRetur: returItems.map(i2=>({name:i2.name,qty:i2.qty,price:i2.price,satuan:i2.satuan||'pcs'})),
       };
       const revs = await appendPORevision(po, entry, {total:newTotal});
 
@@ -8112,8 +8149,8 @@ function EditPOView({po, onCancel, onSaved}) {
             catatan: editForm.notes||'',
             totalLama,
             totalBaru: totalEdit,
-            itemsLama: (po.items||[]).map(i=>({name:i.name,qty:i.qty,price:i.price||0})),
-            itemsBaru: items.map(i=>({name:i.name,qty:parseInt(i.qty)||0,price:parseInt(i.price)||0})),
+            itemsLama: (po.items||[]).map(i=>({name:i.name,qty:i.qty,price:i.price||0,satuan:i.satuan||'pcs'})),
+            itemsBaru: items.map(i=>({name:i.name,qty:parseInt(i.qty)||0,price:parseInt(i.price)||0,satuan:i.satuan||'pcs'})),
           };
           const r = await appendPORevision(po, entry, {
             supplier:  editForm.supplier,
@@ -8506,7 +8543,7 @@ function Pembelian() {
     const matchKat = activeKat==='Semua' || p.category?.startsWith(activeKat);
     const matchSearch = smartMatch(search, p.name, p.category||'');
     return matchKat && matchSearch;
-  });
+  }).sort((a,b)=>search?smartScore(search,b.name)-smartScore(search,a.name):0);
 
   // Cart helpers
   // Susun daftar satuan produk: unit kecil + unit besar (kolom) + satuan tambahan (tabel product_units)
@@ -8663,7 +8700,18 @@ function Pembelian() {
           const prodUnitBesar = (prod.unit_besar||'').toLowerCase();
           const isUnitBesar = prodUnitBesar && prodUnitBesar!=='pcs' && itemUnit &&
                               (itemUnit===prodUnitBesar || itemUnit.includes(prodUnitBesar) || prodUnitBesar.includes(itemUnit));
-          const konversi = isUnitBesar ? (prod.konversi||1) : 1;
+          let konversi = isUnitBesar ? (prod.konversi||1) : 1;
+          // Cek juga satuan tambahan di tabel product_units (mis. ROLL ratio 10)
+          if(konversi===1 && itemUnit && itemUnit!==(prod.unit_kecil||'pcs').toLowerCase() && itemUnit!=='pcs'){
+            try {
+              const pu = await sbGet('product_units',{eq:{product_id:productId}});
+              const hit = (pu||[]).find(u=>{
+                const un=(u.unit_name||'').toLowerCase();
+                return un&&(un===itemUnit||un.includes(itemUnit)||itemUnit.includes(un));
+              });
+              if(hit&&(hit.ratio||1)>1) konversi = hit.ratio;
+            } catch(e){}
+          }
           const qtyToAdd = (parseInt(item.qty)||0) * konversi;
 
           // Harga beli per unit kecil
@@ -8692,16 +8740,16 @@ function Pembelian() {
           // Cek apakah harga beli berubah & harga jual perlu diupdate
           const oldBuyPrice = prod.buy_price||0;
           const currentSellPrice = prod.price||0;
-          if(newBuyPrice>0 && newBuyPrice !== oldBuyPrice) {
-            // Saran margin 20%, 30%, 40%
-            const saran20 = Math.ceil(newBuyPrice * 1.20 / 100) * 100;
-            const saran30 = Math.ceil(newBuyPrice * 1.30 / 100) * 100;
-            const saran40 = Math.ceil(newBuyPrice * 1.40 / 100) * 100;
+          if(newBuyPricePerUnit>0 && newBuyPricePerUnit !== oldBuyPrice) {
+            // Saran margin dihitung dari harga per unit kecil (hasil konversi)
+            const saran20 = Math.ceil(newBuyPricePerUnit * 1.20 / 100) * 100;
+            const saran30 = Math.ceil(newBuyPricePerUnit * 1.30 / 100) * 100;
+            const saran40 = Math.ceil(newBuyPricePerUnit * 1.40 / 100) * 100;
             updates.push({
               productId,
               name: item.name,
               matchedName: prod.name,
-              oldBuyPrice, newBuyPrice,
+              oldBuyPrice, newBuyPrice: newBuyPricePerUnit,
               currentSellPrice,
               saran20, saran30, saran40,
               newSellPrice: saran20, // default markup 20%
@@ -8941,7 +8989,7 @@ function Pembelian() {
         {(selected.items||[]).map((it,i)=>(
           <div key={i} style={{display:'grid',gridTemplateColumns:'1fr auto auto auto',gap:6,padding:'10px 8px',borderBottom:i<(selected.items?.length-1)?'1px solid #f5f5f5':'none',fontSize:13}}>
             <span style={{fontWeight:600}}>{it.name}</span>
-            <span style={{textAlign:'center',color:MT}}>{it.qty}</span>
+            <span style={{textAlign:'center',color:MT}}>{it.qty} {it.satuan||'pcs'}</span>
             <span style={{textAlign:'right',color:MT}}>{fmt(it.price)}</span>
             <span style={{textAlign:'right',fontWeight:700,color:G}}>{fmt((it.qty||0)*(it.price||0))}</span>
           </div>
@@ -9001,7 +9049,7 @@ function Pembelian() {
               <tr>
                 <td>${i+1}</td>
                 <td>${item.name}</td>
-                <td style="text-align:center">${item.qty}</td>
+                <td style="text-align:center">${item.qty} ${item.satuan||'pcs'}</td>
                 <td style="text-align:right">Rp ${(item.price||0).toLocaleString('id-ID')}</td>
                 <td style="text-align:right">Rp ${((item.qty||0)*(item.price||0)).toLocaleString('id-ID')}</td>
               </tr>
