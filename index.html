@@ -1256,7 +1256,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
     if(!bypassStok) {
       const needMap = {};
       cart.forEach(i=>{
-        if(!i.id) return;
+        if(!i.id||i.pakai_stok===false) return;
         const need = i._unitBesar?(parseInt(i.qty)||0)*(i._konversi||1):(parseInt(i.qty)||0);
         needMap[i.id]=(needMap[i.id]||0)+need;
       });
@@ -1309,6 +1309,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
       await Promise.all(cart.map(async item=>{
         const pid = item.id||item.product_id;
         if(!pid) return;
+        if(item.pakai_stok===false) return; // produk non-stok: tidak potong stok
         const qtyOut = item._unitBesar?(item.qty*(item._konversi||1)):item.qty;
         // Ambil batches urut terlama
         const batches = await sbGet('stock_batches',{eq:{product_id:pid},order:'tanggal_masuk',asc:true}).catch(()=>[]);
@@ -1923,7 +1924,7 @@ function Transaksi() {
     const cartKey = product.id+'_'+unit;
     setCart(prev=>{
       // Guard stok: total kebutuhan semua baris produk ini + 1 unit baru
-      if(!bypassStok && product.id){
+      if(!bypassStok && product.id && product.pakai_stok!==false){
         const per   = product._unitBesar?(product._konversi||1):1;
         const sudah = prev.reduce((s,i)=>i.id===product.id?s+((parseInt(i.qty)||0)*(i._unitBesar?(i._konversi||1):1)):s,0);
         if(sudah+per>(product.stock||0)){
@@ -1951,7 +1952,7 @@ function Transaksi() {
   const updateQty   = (cartKey,d)        => setCart(prev=>{
     if(d>0&&!bypassStok){
       const it = prev.find(i=>(i.cartKey||i.id+'_Pcs')===cartKey);
-      if(it&&it.id){
+      if(it&&it.id&&it.pakai_stok!==false){
         const per   = it._unitBesar?(it._konversi||1):1;
         const sudah = prev.reduce((s,i)=>i.id===it.id?s+((parseInt(i.qty)||0)*(i._unitBesar?(i._konversi||1):1)):s,0);
         if(sudah+per>(it.stock||0)){
@@ -2651,12 +2652,24 @@ function Manajemen() {
   useEffect(()=>{load();},[load]);
 
   const filtered = products.filter(p=>p.name.toLowerCase().includes(search.toLowerCase()));
-  const openEdit = (p) => { setEditId(p.id); setForm({name:p.name,price:p.price,stock:p.stock,category:p.category||"",tipe_barang:p.tipe_barang||"Default"}); setShowForm(true); };
+  const openEdit = (p) => { setEditId(p.id); setForm({
+    name:p.name, price:p.price, buy_price:p.buy_price??"", stock:p.stock,
+    unit_kecil:p.unit_kecil||"", unit_besar:p.unit_besar||"", konversi:p.konversi??"",
+    harga_besar:p.harga_besar??"", category:p.category||"", tipe_barang:p.tipe_barang||"Default",
+    pakai_stok: p.pakai_stok!==false,
+  }); setShowForm(true); };
   const save = async() => {
     if(!form.name||!form.price) return alert("Nama & harga wajib!");
     setSaving(true);
     try {
-      const data={name:form.name,price:parseInt(form.price),stock:parseInt(form.stock||0),category:form.category,tipe_barang:form.tipe_barang||"Default"};
+      const data={
+        name:form.name, price:parseInt(form.price), buy_price:parseInt(form.buy_price)||0,
+        stock:parseInt(form.stock||0),
+        unit_kecil:form.unit_kecil||null, unit_besar:form.unit_besar||null,
+        konversi:parseInt(form.konversi)||1, harga_besar:parseInt(form.harga_besar)||0,
+        category:form.category, tipe_barang:form.tipe_barang||"Default",
+        pakai_stok: form.pakai_stok!==false,
+      };
       editId ? await sbUpdate("products",editId,data) : await sbInsert("products",data);
       setShowForm(false); setEditId(null); setForm({name:"",price:"",stock:"",category:""}); load();
     } catch(e) { alert("Gagal: "+e.message); }
@@ -2685,6 +2698,14 @@ function Manajemen() {
             onFocus={e=>e.target.style.borderColor=G} onBlur={e=>e.target.style.borderColor='#eee'}/>
         </div>
       ))}
+      <label style={{display:'flex',alignItems:'center',gap:10,background:'#F5F6FA',borderRadius:10,padding:'11px 14px',marginBottom:8,cursor:'pointer'}}>
+        <input type="checkbox" checked={form.pakai_stok!==false} onChange={e=>setForm(p=>({...p,pakai_stok:e.target.checked}))}
+          style={{width:17,height:17,accentColor:G,flexShrink:0}}/>
+        <div>
+          <div style={{fontSize:13,fontWeight:700}}>📦 Pakai Stok</div>
+          <div style={{fontSize:10,color:MT}}>Kalau dimatikan, produk bisa dijual tanpa cek & potong stok (jasa, barang curah, dll)</div>
+        </div>
+      </label>
       <div style={{marginBottom:8}}>
         <label style={{fontSize:12,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Tipe Barang</label>
         <select value={form.tipe_barang||'Default'} onChange={e=>setForm(p=>({...p,tipe_barang:e.target.value}))}
@@ -4097,12 +4118,95 @@ function ManajemenHub() {
 
 
 // ── KEUANGAN ───────────────────────────────────────────────────────────────
+// ── FORM KAS MANUAL: pemasukan/pengeluaran di luar transaksi ────────────────
+function KasManualForm({onClose, onSaved}) {
+  const today = new Date().toISOString().slice(0,10);
+  const [tipe, setTipe]       = React.useState('masuk');
+  const [nominal, setNominal] = React.useState('');
+  const [kontak, setKontak]   = React.useState('');
+  const [tanggal, setTanggal] = React.useState(today);
+  const [catatan, setCatatan] = React.useState('');
+  const [saving, setSaving]   = React.useState(false);
+
+  const save = async() => {
+    const amt = parseInt(String(nominal).replace(/\D/g,''))||0;
+    if(amt<=0) return alert('Isi nominal!');
+    if(!catatan.trim()) return alert('Isi catatan (untuk apa uang ini)!');
+    setSaving(true);
+    try {
+      await sbInsert('payments',[{
+        transaction_id: null,
+        type: tipe,
+        amount: amt,
+        method: 'Manual',
+        note: catatan.trim()+(kontak.trim()?` — ${kontak.trim()}`:''),
+        created_at: tanggal===today ? new Date().toISOString() : tanggal+'T12:00:00+07:00',
+      }]);
+      notifyDataChanged('kas');
+      alert(`✅ ${tipe==='masuk'?'Pemasukan':'Pengeluaran'} lain ${fmt(amt)} tercatat!\nMuncul di Laporan Arus Keuangan tanggal ${tanggal}.`);
+      onSaved&&onSaved();
+      onClose();
+    } catch(e){ alert('Gagal: '+e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:420,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:14}}>💰 Transaksi Keuangan</div>
+
+        <div style={{fontSize:12,color:MT,fontWeight:600,marginBottom:6}}>Transaksi</div>
+        <div style={{display:'flex',gap:8,marginBottom:16}}>
+          {[['masuk','Pemasukan',G,GL],['keluar','Pengeluaran',RD,'#FFF0F0']].map(([val,label,col,bg])=>(
+            <button key={val} onClick={()=>setTipe(val)}
+              style={{flex:1,padding:12,border:`2px solid ${tipe===val?col:'#eee'}`,borderRadius:10,background:tipe===val?bg:'#fff',color:tipe===val?col:MT,fontWeight:tipe===val?800:500,cursor:'pointer',fontSize:14}}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{fontSize:12,color:MT,fontWeight:600,marginBottom:4}}>Nominal</div>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,padding:'10px 14px',border:`2px solid ${tipe==='masuk'?G:RD}`,borderRadius:12}}>
+          <span style={{fontWeight:800,fontSize:20,color:MT}}>Rp</span>
+          <input type="text" inputMode="numeric" value={nominal?parseInt(String(nominal).replace(/\D/g,'')||'0').toLocaleString('id-ID'):''}
+            onChange={e=>setNominal(e.target.value.replace(/\D/g,''))} placeholder="0"
+            style={{flex:1,border:'none',outline:'none',fontSize:26,fontWeight:900,color:tipe==='masuk'?GD:RD,minWidth:0,background:'transparent'}}/>
+        </div>
+
+        <div style={{fontSize:11,color:MT,fontWeight:600,marginBottom:4}}>Kontak / Sumber (opsional)</div>
+        <input value={kontak} onChange={e=>setKontak(e.target.value)} placeholder={tipe==='masuk'?'Dari siapa / sumber dana':'Ke siapa / tujuan'}
+          style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:10,fontSize:13,boxSizing:'border-box',marginBottom:12}}/>
+
+        <div style={{fontSize:11,color:MT,fontWeight:600,marginBottom:4}}>Tanggal</div>
+        <input type="date" value={tanggal} max={today} onChange={e=>setTanggal(e.target.value)}
+          style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:10,fontSize:13,boxSizing:'border-box',marginBottom:12}}/>
+
+        <div style={{fontSize:11,color:MT,fontWeight:600,marginBottom:4}}>Catatan *</div>
+        <input value={catatan} onChange={e=>setCatatan(e.target.value)} placeholder={tipe==='masuk'?'Contoh: Modal tambahan, sewa etalase...':'Contoh: Bayar listrik, gaji karyawan, beli ATK...'}
+          style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:10,fontSize:13,boxSizing:'border-box',marginBottom:16}}/>
+
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={onClose} disabled={saving}
+            style={{flex:1,padding:13,background:'#eee',border:'none',borderRadius:12,fontWeight:700,fontSize:14,cursor:'pointer'}}>Batal</button>
+          <button onClick={save} disabled={saving}
+            style={{flex:2,padding:13,background:saving?MT:(tipe==='masuk'?G:RD),color:'#fff',border:'none',borderRadius:12,fontWeight:800,fontSize:15,cursor:'pointer'}}>
+            {saving?'⏳ Menyimpan...':'💾 SIMPAN'}
+          </button>
+        </div>
+        <div style={{fontSize:10,color:MT,marginTop:10,textAlign:'center'}}>Tercatat sebagai {tipe==='masuk'?'Pemasukan':'Pengeluaran'} Lain di Laporan Arus Keuangan</div>
+      </div>
+    </div>
+  );
+}
+
 function Keuangan({refreshKey}) {
   const [txList,   setTxList]   = useState([]);
   const [returns,  setReturns]  = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [activeTab,setActiveTab]= useState('semua');
   const [search,   setSearch]   = useState('');
+  const [showKasForm,setShowKasForm]= useState(false);
 
   const load = useCallback(async()=>{
     setLoading(true);
@@ -4180,6 +4284,11 @@ function Keuangan({refreshKey}) {
 
       {/* Search */}
       <div style={{marginBottom:12}}>
+        <button onClick={()=>setShowKasForm(true)}
+          style={{width:'100%',padding:12,background:'#fff',border:`2px dashed ${G}`,borderRadius:12,color:GD,fontWeight:800,fontSize:13,cursor:'pointer',marginBottom:12}}>
+          ➕ Catat Pemasukan / Pengeluaran Lain
+        </button>
+        {showKasForm&&<KasManualForm onClose={()=>setShowKasForm(false)} onSaved={load}/>}
         <input value={search} onChange={e=>setSearch(e.target.value)}
           placeholder="Cari invoice / nama pelanggan..."
           style={{width:'100%',padding:'9px 14px',border:'1.5px solid #eee',borderRadius:10,fontSize:13,outline:'none',boxSizing:'border-box'}}
@@ -4757,6 +4866,22 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
 
   const [totalRetur, setTotalRetur] = useState(0);
   const [retMap, setRetMap] = useState({}); // transaction_id -> {total, list:[retur]}
+  const [returList, setReturList] = useState([]); // daftar retur dalam periode
+  const [showReturList, setShowReturList] = useState(false);
+
+  // Buka detail invoice dari daftar retur (fetch kalau di luar hasil filter)
+  const openReturInvoice = async(txId) => {
+    if(!txId) return;
+    let tx = trans.find(t=>t.id===txId);
+    if(!tx){
+      try {
+        const r = await sbGet('transactions',{eq:{id:txId}});
+        tx = r?.[0];
+        if(tx) setTrans(prev=>[tx,...prev]);
+      } catch(e){}
+    }
+    if(tx) openDetail(tx);
+  };
 
   const search = async() => {
     if(!filter.dari||!filter.sampai) return alert('Pilih tanggal terlebih dahulu!');
@@ -4779,7 +4904,11 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
           m[r.transaction_id].list.push(r);
         });
         setRetMap(m);
-      } catch(e){ setTotalRetur(0); setRetMap({}); }
+        setReturList(custRets.filter(r=>{
+          const tgl = r.created_at?.slice(0,10);
+          return tgl>=filter.dari&&tgl<=filter.sampai;
+        }));
+      } catch(e){ setTotalRetur(0); setRetMap({}); setReturList([]); }
       const all = await sbGetAll('transactions',{order:'created_at',asc:false});
       const filtered = all.filter(t=>{
         const tgl = t.created_at?.slice(0,10);
@@ -4997,6 +5126,38 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                 style={{background:'none',border:'none',color:G,fontWeight:700,fontSize:14,cursor:'pointer',padding:'0 0 12px 0',display:'block'}}>
                 ← Kembali ke Daftar
               </button>
+            </div>
+          )}
+
+          {/* Laporan Retur periode ini */}
+          {returList.length>0&&(
+            <div style={{background:'#fff',borderRadius:12,marginBottom:14,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+              <div onClick={()=>setShowReturList(v=>!v)}
+                style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',borderLeft:`4px solid ${RD}`}}>
+                <div style={{fontWeight:800,fontSize:13,color:RD}}>↩️ Laporan Retur Penjualan ({returList.length}) — total {fmt(returList.reduce((s,r)=>s+(r.total||0),0))}</div>
+                <span style={{color:RD,fontSize:15,transform:showReturList?'rotate(90deg)':'none',transition:'transform 0.15s'}}>›</span>
+              </div>
+              {showReturList&&(
+                <div style={{padding:'0 16px 12px'}}>
+                  {returList.map((r,i)=>(
+                    <div key={i} onClick={()=>openReturInvoice(r.transaction_id)}
+                      style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'9px 12px',background:'#FFF7F7',borderRadius:8,marginBottom:6,cursor:r.transaction_id?'pointer':'default'}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,fontWeight:700,fontFamily:'monospace'}}>{r.return_no}</div>
+                        <div style={{fontSize:10,color:MT}}>
+                          {r.created_at?.slice(0,10)} · {r.customer||'Umum'} · {r.reason||'-'}
+                          {r.action==='refund'?' · 💵 Refund':r.action==='tukar'?' · 🔄 Tukar':''}
+                        </div>
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
+                        <span style={{fontWeight:800,fontSize:12,color:RD}}>-{fmt(r.total||0)}</span>
+                        {r.transaction_id&&<span style={{color:RD,fontSize:13}}>›</span>}
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{fontSize:10,color:MT,marginTop:4}}>Ketuk baris untuk membuka invoice asalnya</div>
+                </div>
+              )}
             </div>
           )}
 
@@ -6406,10 +6567,14 @@ function ArusKeuanganDetail({onBack, onOpenInvoice}) {
       // ── Basis pembayaran (akurat): pakai tabel payments kalau tersedia ──
       const payBased = Array.isArray(pays)&&pays.length>0;
       let totalPemasukan, refundKeluar = 0, paysPeriode = [];
+      let pemasukanLain = 0, pengeluaranLain = 0;
       if(payBased){
         paysPeriode    = filterDate(pays,dari,sampai);
         totalPemasukan = paysPeriode.filter(p=>p.type==='masuk').reduce((s,p)=>s+(p.amount||0),0);
         refundKeluar   = paysPeriode.filter(p=>p.type==='keluar').reduce((s,p)=>s+(p.amount||0),0);
+        // "Lain" = catatan kas manual (tanpa transaksi terkait)
+        pemasukanLain   = paysPeriode.filter(p=>p.type==='masuk'&&!p.transaction_id).reduce((s,p)=>s+(p.amount||0),0);
+        pengeluaranLain = paysPeriode.filter(p=>p.type==='keluar'&&!p.transaction_id).reduce((s,p)=>s+(p.amount||0),0);
       } else {
         // Fallback lama: basis status transaksi (kurang akurat untuk piutang/cicilan)
         totalPemasukan = txPeriode.reduce((s,t)=>s+t.total,0);
@@ -6454,6 +6619,7 @@ function ArusKeuanganDetail({onBack, onOpenInvoice}) {
 
       setData({
         dari,sampai,totalPemasukan,totalPengeluaran,neto,
+        pemasukanLain,pengeluaranLain,
         perHari: Object.values(hariMap).sort((a,b)=>b.date.localeCompare(a.date)),
       });
     } catch(e){}
@@ -6485,18 +6651,18 @@ function ArusKeuanganDetail({onBack, onOpenInvoice}) {
               <div>
                 <div style={{fontSize:11,color:MT}}>Total Pemasukan</div>
                 <div style={{fontWeight:800,fontSize:16,color:G,marginTop:2}}>{fmt(data.totalPemasukan)}</div>
-                <div style={{fontSize:11,color:MT,marginTop:6}}>Pemasukan</div>
-                <div style={{fontWeight:700,fontSize:13,color:G}}>{fmt(data.totalPemasukan)}</div>
+                <div style={{fontSize:11,color:MT,marginTop:6}}>Pemasukan Penjualan</div>
+                <div style={{fontWeight:700,fontSize:13,color:G}}>{fmt(data.totalPemasukan-(data.pemasukanLain||0))}</div>
                 <div style={{fontSize:11,color:MT,marginTop:4}}>Pemasukan Lain</div>
-                <div style={{fontWeight:700,fontSize:13,color:G}}>Rp 0</div>
+                <div style={{fontWeight:700,fontSize:13,color:G}}>{fmt(data.pemasukanLain||0)}</div>
               </div>
               <div>
                 <div style={{fontSize:11,color:MT}}>Total Pengeluaran</div>
                 <div style={{fontWeight:800,fontSize:16,color:RD,marginTop:2}}>{fmt(data.totalPengeluaran)}</div>
-                <div style={{fontSize:11,color:MT,marginTop:6}}>Pengeluaran</div>
-                <div style={{fontWeight:700,fontSize:13,color:RD}}>{fmt(data.totalPengeluaran)}</div>
+                <div style={{fontSize:11,color:MT,marginTop:6}}>Pengeluaran Usaha</div>
+                <div style={{fontWeight:700,fontSize:13,color:RD}}>{fmt(data.totalPengeluaran-(data.pengeluaranLain||0))}</div>
                 <div style={{fontSize:11,color:MT,marginTop:4}}>Pengeluaran Lain</div>
-                <div style={{fontWeight:700,fontSize:13,color:RD}}>Rp 0</div>
+                <div style={{fontWeight:700,fontSize:13,color:RD}}>{fmt(data.pengeluaranLain||0)}</div>
               </div>
             </div>
             <div style={{background:'#F5F6FA',borderRadius:10,padding:'14px 0',textAlign:'center'}}>
@@ -6578,6 +6744,8 @@ function LaporanPembelian({onBack}) {
   const [periode, setPeriode] = useState('bulan');
   const [selected, setSelected] = useState(null);
   const [poItems, setPoItems] = useState([]);
+  const [returSupplier, setReturSupplier] = useState([]);
+  const [showReturList, setShowReturList] = useState(false);
 
   const today = new Date().toISOString().slice(0,10);
 
@@ -6593,6 +6761,28 @@ function LaporanPembelian({onBack}) {
         ...po, items: await sbGet('po_items',{eq:{po_id:po.id}})
       })));
       setOrders(withItems);
+      // Retur ke supplier: dari tabel returns + riwayat revisi PO (tipe retur)
+      try {
+        const rets = await sbGetAll('returns',{order:'created_at',asc:false});
+        const fromReturns = rets.filter(r=>r.type==='ke_supplier'&&r.created_at?.slice(0,10)>=dari)
+          .map(r=>({tanggal:r.created_at?.slice(0,10), ref:r.return_no, supplier:r.supplier||'-', alasan:r.reason||'-', total:r.total||0, po:null}));
+        const fromRevisi = [];
+        pos.forEach(po=>{
+          (Array.isArray(po.revisions)?po.revisions:[]).forEach(rev=>{
+            if(rev.tipe==='retur'&&rev.tanggal?.slice(0,10)>=dari){
+              fromRevisi.push({
+                tanggal: rev.tanggal?.slice(0,10),
+                ref: 'PO-'+po.id,
+                supplier: po.supplier||'-',
+                alasan: rev.catatan||'-',
+                total: rev.totalRetur||((rev.totalLama||0)-(rev.totalBaru||0)),
+                po: withItems.find(w=>w.id===po.id)||po,
+              });
+            }
+          });
+        });
+        setReturSupplier([...fromReturns,...fromRevisi].sort((a,b)=>(b.tanggal||'').localeCompare(a.tanggal||'')));
+      } catch(e){ setReturSupplier([]); }
     } catch(e){}
     setLoading(false);
   };
@@ -6658,8 +6848,38 @@ function LaporanPembelian({onBack}) {
 
       <div style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',display:'flex',justifyContent:'space-between'}}>
         <div><div style={{fontSize:11,color:MT}}>Total Pembelian</div><div style={{fontWeight:800,fontSize:18,color:RD,marginTop:2}}>{fmt(totalBeli)}</div></div>
+        <div style={{textAlign:'right'}}><div style={{fontSize:11,color:MT}}>Retur ke Supplier</div><div style={{fontWeight:800,fontSize:18,color:'#8E44AD',marginTop:2}}>{fmt(returSupplier.reduce((s,r)=>s+(r.total||0),0))}</div></div>
         <div style={{textAlign:'right'}}><div style={{fontSize:11,color:MT}}>Jumlah PO</div><div style={{fontWeight:800,fontSize:18,marginTop:2}}>{orders.length}</div></div>
       </div>
+
+      {/* Laporan Retur ke Supplier */}
+      {returSupplier.length>0&&(
+        <div style={{background:'#fff',borderRadius:12,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+          <div onClick={()=>setShowReturList(v=>!v)}
+            style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',borderLeft:'4px solid #8E44AD'}}>
+            <div style={{fontWeight:800,fontSize:13,color:'#8E44AD'}}>↩️ Laporan Retur ke Supplier ({returSupplier.length})</div>
+            <span style={{color:'#8E44AD',fontSize:15,transform:showReturList?'rotate(90deg)':'none',transition:'transform 0.15s'}}>›</span>
+          </div>
+          {showReturList&&(
+            <div style={{padding:'0 16px 12px'}}>
+              {returSupplier.map((r,i)=>(
+                <div key={i} onClick={()=>r.po&&setSelected(r.po)}
+                  style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'9px 12px',background:'#FAF5FF',borderRadius:8,marginBottom:6,cursor:r.po?'pointer':'default'}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,fontWeight:700,fontFamily:'monospace'}}>{r.ref}</div>
+                    <div style={{fontSize:10,color:MT}}>{r.tanggal} · {r.supplier} · {r.alasan}</div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,marginLeft:8}}>
+                    <span style={{fontWeight:800,fontSize:12,color:'#8E44AD'}}>-{fmt(r.total||0)}</span>
+                    {r.po&&<span style={{color:'#8E44AD',fontSize:13}}>›</span>}
+                  </div>
+                </div>
+              ))}
+              <div style={{fontSize:10,color:MT,marginTop:4}}>Ketuk baris PO untuk membuka detailnya</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {loading?<Loading/>:orders.length===0
         ?<div style={{textAlign:'center',padding:'32px 0',color:MT,background:'#fff',borderRadius:12}}><div style={{fontSize:36}}>📦</div><div>Tidak ada pembelian</div></div>
@@ -7537,7 +7757,7 @@ async function stokMasuk(productId, qty, note) {
   if(!productId||!qty) return;
   try {
     const prods = await sbGet('products',{eq:{id:productId}});
-    const prod = prods?.[0]; if(!prod) return;
+    const prod = prods?.[0]; if(!prod||prod.pakai_stok===false) return;
     await sbUpdate('products', productId, {stock:(prod.stock||0)+qty});
     // Un-consume batch FIFO: isi kembali batch terbaru yang sudah terpakai
     let left = qty;
@@ -7559,7 +7779,7 @@ async function stokKeluar(productId, qty, note) {
   if(!productId||!qty) return;
   try {
     const prods = await sbGet('products',{eq:{id:productId}});
-    const prod = prods?.[0]; if(!prod) return;
+    const prod = prods?.[0]; if(!prod||prod.pakai_stok===false) return;
     await sbUpdate('products', productId, {stock:Math.max(0,(prod.stock||0)-qty)});
     let left = qty;
     const batches = ((await sbGet('stock_batches',{eq:{product_id:productId},order:'tanggal_masuk',asc:true}).catch(()=>[]))||[]).filter(b=>b.qty_sisa>0);
@@ -7590,7 +7810,7 @@ async function adjustStockPO(deltaItems, poId, note) {
       prod = allProds.find(p=>p.name.toLowerCase()===q)
           || allProds.find(p=>p.name.toLowerCase().includes(q)||q.includes(p.name.toLowerCase()));
     }
-    if(!prod) continue;
+    if(!prod||prod.pakai_stok===false) continue;
     // Konversi unit besar → unit kecil (sama seperti saat terima PO)
     const itemUnit  = (d.satuan||'').toLowerCase();
     const unitBesar = (prod.unit_besar||'').toLowerCase();
@@ -8101,11 +8321,77 @@ function EditPOView({po, onCancel, onSaved}) {
     );
 }
 
+// ── MODAL MULTISATUAN PEMBELIAN (ala Kasir Pintar) ──────────────────────────
+function PembelianUnitModal({product, existing, onOk, onClose}) {
+  const [qtyKecil, setQtyKecil] = React.useState(existing?.kecil??'');
+  const [qtyBesar, setQtyBesar] = React.useState(existing?.besar??'');
+  const [harga, setHarga]       = React.useState(existing?.harga??(product.buy_price||''));
+  const uk = product.unit_kecil||'pcs';
+  const ub = product.unit_besar||'unit besar';
+  const konv = product.konversi||1;
+  const totalKecil = (parseInt(qtyKecil)||0)+(parseInt(qtyBesar)||0)*konv;
+  const totalRp = totalKecil*(parseInt(harga)||0);
+
+  const ok = () => {
+    const k=parseInt(qtyKecil)||0, b=parseInt(qtyBesar)||0, h=parseInt(harga)||0;
+    if(k<=0&&b<=0) return alert('Isi jumlah minimal di salah satu satuan!');
+    if(h<=0) return alert('Isi harga beli per '+uk+'!');
+    onOk({qtyKecil:k, qtyBesar:b, harga:h});
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:400,boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+        <div style={{fontWeight:900,fontSize:16,textAlign:'center',marginBottom:14,letterSpacing:0.5}}>TAMBAH MULTISATUAN</div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',borderBottom:'1px solid #eee',paddingBottom:10,marginBottom:16}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:14,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{product.name}</div>
+            <div style={{fontSize:11,color:MT}}>stok: {product.stock||0} {uk}</div>
+          </div>
+          <div style={{textAlign:'right',flexShrink:0,marginLeft:8}}>
+            <div style={{fontWeight:700,fontSize:13}}>{product.buy_price?fmt(product.buy_price):'—'}</div>
+            <div style={{fontSize:10,color:MT}}>beli terakhir/{uk}</div>
+          </div>
+        </div>
+
+        {[[uk,qtyKecil,setQtyKecil,''],[ub+' ('+konv+' '+uk+')',qtyBesar,setQtyBesar,'']].map(([label,val,setter],i)=>(
+          <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <div style={{fontSize:14,fontWeight:600,textTransform:i===1?'uppercase':'none'}}>{label}</div>
+            <input type="number" min="0" value={val} placeholder="0"
+              onChange={e=>setter(e.target.value)}
+              style={{width:110,padding:'9px 12px',border:'1.5px solid #ddd',borderRadius:20,fontSize:15,fontWeight:700,textAlign:'center'}}/>
+          </div>
+        ))}
+
+        <div style={{fontSize:12,color:MT,fontWeight:600,marginTop:16,marginBottom:5}}>Harga beli per {uk}</div>
+        <input type="number" min="0" value={harga} onChange={e=>setHarga(e.target.value)}
+          style={{width:'100%',padding:'11px 14px',border:`1.8px solid ${G}`,borderRadius:10,fontSize:16,fontWeight:700,boxSizing:'border-box',textAlign:'center'}}/>
+
+        {totalKecil>0&&(
+          <div style={{background:GL,borderRadius:8,padding:'8px 12px',marginTop:10,fontSize:12,display:'flex',justifyContent:'space-between'}}>
+            <span style={{color:GD,fontWeight:600}}>Total: {totalKecil} {uk}</span>
+            <span style={{color:GD,fontWeight:800}}>{fmt(totalRp)}</span>
+          </div>
+        )}
+
+        <div style={{display:'flex',gap:0,marginTop:16,borderTop:'1px solid #eee',paddingTop:4}}>
+          <button onClick={onClose}
+            style={{flex:1,padding:12,background:'none',border:'none',color:GD,fontWeight:800,fontSize:14,cursor:'pointer',letterSpacing:1}}>BATAL</button>
+          <button onClick={ok}
+            style={{flex:1,padding:12,background:'none',border:'none',color:GD,fontWeight:800,fontSize:14,cursor:'pointer',letterSpacing:1}}>OK</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Pembelian() {
   // View: 'browse' | 'cart' | 'list' | 'detail'
   const [view,       setView]       = useState('list');
   const [products,   setProducts]   = useState([]);
   const [cart,       setCart]       = useState([]); // {product, qty, price, buy_price}
+  const [poUnitSel,  setPoUnitSel]  = useState(null); // modal multisatuan pembelian
   const [orders,     setOrders]     = useState([]);
   const [selected,   setSelected]   = useState(null);
   const [loading,    setLoading]    = useState(false);
@@ -8174,6 +8460,27 @@ function Pembelian() {
   });
 
   // Cart helpers
+  // Produk multisatuan → buka modal; produk biasa → langsung tambah
+  const handleProductTap = (prod) => {
+    if(prod.unit_besar&&(prod.konversi||1)>1){
+      const kecil = cart.find(i=>i.cartKey===prod.id+'_kecil');
+      const besar = cart.find(i=>i.cartKey===prod.id+'_besar');
+      const hargaAwal = kecil?.price ?? (besar ? Math.round(besar.price/(prod.konversi||1)) : '');
+      setPoUnitSel({product:prod, existing:{kecil:kecil?.qty??'', besar:besar?.qty??'', harga:hargaAwal}});
+    } else {
+      addToCart(prod);
+    }
+  };
+  const applyUnitSel = ({qtyKecil, qtyBesar, harga}) => {
+    const p = poUnitSel.product;
+    setCart(prev=>{
+      const next = prev.filter(i=>i.product.id!==p.id);
+      if(qtyKecil>0) next.push({product:p, cartKey:p.id+'_kecil', qty:qtyKecil, price:harga, unit:p.unit_kecil||'pcs', isBesar:false});
+      if(qtyBesar>0) next.push({product:p, cartKey:p.id+'_besar', qty:qtyBesar, price:harga*(p.konversi||1), unit:p.unit_besar, isBesar:true});
+      return next;
+    });
+    setPoUnitSel(null);
+  };
   const addToCart = (prod) => {
     const isBesar = prod._forceBesar;
     const cartKey = prod.id + (isBesar?'_besar':'_kecil');
@@ -8191,8 +8498,9 @@ function Pembelian() {
     });
   };
   const updateQty = (key, qty) => {
-    if(qty<=0) { setCart(prev=>prev.filter(i=>(i.cartKey||i.product.id)!==key)); return; }
-    setCart(prev=>prev.map(i=>(i.cartKey||i.product.id)===key?{...i,qty}:i));
+    const match = i => (i.cartKey===key)||(i.product.id===key);
+    if(qty<=0) { setCart(prev=>prev.filter(i=>!match(i))); return; }
+    setCart(prev=>prev.map(i=>match(i)?{...i,qty:Math.max(1,parseInt(qty)||1)}:i));
   };
   const updatePrice = (prodId, price) => {
     setCart(prev=>prev.map(i=>i.product.id===prodId?{...i,price:parseInt(price)||0}:i));
@@ -8223,6 +8531,7 @@ function Pembelian() {
         qty: i.qty,
         price: i.price,
         subtotal: i.qty * i.price,
+        satuan: i.unit||i.product.unit_kecil||'pcs',
       })));
       notifyDataChanged('pembelian');
       setCart([]);
@@ -8746,14 +9055,14 @@ function Pembelian() {
                   <input value={item.qty} onChange={e=>updateQty(item.cartKey||item.product.id,parseInt(e.target.value)||1)}
                     type="number" min="1"
                     style={{width:50,textAlign:'center',padding:'6px',border:'1.5px solid #eee',borderRadius:8,fontSize:13}}/>
-                  <button onClick={()=>updateQty(item.product.id, item.qty+1)}
+                  <button onClick={()=>updateQty(item.cartKey||item.product.id, item.qty+1)}
                     style={{width:30,height:30,borderRadius:'50%',background:GL,border:`1px solid ${G}`,cursor:'pointer',fontSize:16,color:GD,display:'flex',alignItems:'center',justifyContent:'center'}}>+</button>
                 </div>
               </div>
               <div style={{textAlign:'right'}}>
                 <div style={{fontSize:10,color:MT,marginBottom:3}}>Subtotal</div>
                 <div style={{fontWeight:800,color:G,fontSize:14}}>{fmt(item.price*item.qty)}</div>
-                <button onClick={()=>updateQty(item.product.id,0)}
+                <button onClick={()=>updateQty(item.cartKey||item.product.id,0)}
                   style={{fontSize:10,color:RD,background:'none',border:'none',cursor:'pointer',marginTop:2}}>🗑️ Hapus</button>
               </div>
             </div>
@@ -8838,13 +9147,17 @@ function Pembelian() {
 
         {/* Product list */}
         <div style={{flex:1,overflowY:'auto'}}>
+          {poUnitSel&&<PembelianUnitModal product={poUnitSel.product} existing={poUnitSel.existing}
+            onOk={applyUnitSel} onClose={()=>setPoUnitSel(null)}/>}
           {prodLoading ? <Loading/> : filteredProds.length===0 ? (
             <div style={{textAlign:'center',padding:'48px 0',color:MT}}>
               <div style={{fontSize:36,marginBottom:10}}>🔍</div>
               Produk tidak ditemukan
             </div>
           ) : filteredProds.map((prod,i)=>{
-            const inCart = cart.find(c=>c.product.id===prod.id);
+            const isMulti = prod.unit_besar&&(prod.konversi||1)>1;
+            const lines = cart.filter(c=>c.product.id===prod.id);
+            const inCart = lines[0];
             const qty = inCart?.qty||0;
             return (
               <div key={prod.id} style={{background:'#fff',borderBottom:'1px solid #f0f0f0',padding:'10px 12px',display:'flex',alignItems:'center',gap:10,cursor:'pointer'}}
@@ -8853,7 +9166,7 @@ function Pembelian() {
                 <div style={{width:44,height:44,borderRadius:10,background:'#F5F6FA',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,flexShrink:0,border:'1px solid #eee'}}>
                   📦
                 </div>
-                <div style={{flex:1,minWidth:0}} onClick={()=>addToCart(prod)}>
+                <div style={{flex:1,minWidth:0}} onClick={()=>handleProductTap(prod)}>
                   <div style={{fontSize:13,fontWeight:700,color:TX,lineHeight:1.3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{prod.name}</div>
                   <div style={{fontSize:12,marginTop:2}}>
                     <span style={{color:MT}}>stok {prod.stock} · </span>
@@ -8864,16 +9177,24 @@ function Pembelian() {
                   <div style={{fontSize:10,color:'#bbb',marginTop:1}}>{prod.category?.split(' > ').slice(-1)[0]}</div>
                 </div>
                 <div style={{flexShrink:0}}>
-                  {qty===0
-                    ? <button onClick={()=>addToCart(prod)}
-                        style={{width:34,height:34,borderRadius:'50%',background:G,border:'none',color:'#fff',fontSize:22,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,boxShadow:'0 2px 6px rgba(46,204,113,0.35)'}}>+</button>
-                    : <div style={{display:'flex',alignItems:'center',gap:5}}>
-                        <button onClick={()=>updateQty(prod.id,qty-1)}
-                          style={{width:28,height:28,borderRadius:'50%',background:'#eee',border:'none',cursor:'pointer',fontSize:16,fontWeight:700}}>−</button>
-                        <span style={{width:24,textAlign:'center',fontWeight:700,color:G,fontSize:14}}>{qty}</span>
-                        <button onClick={()=>updateQty(prod.id,qty+1)}
-                          style={{width:28,height:28,borderRadius:'50%',background:G,border:'none',color:'#fff',cursor:'pointer',fontSize:16,fontWeight:700}}>+</button>
-                      </div>
+                  {isMulti
+                    ? (lines.length===0
+                        ? <button onClick={()=>handleProductTap(prod)}
+                            style={{width:34,height:34,borderRadius:'50%',background:'#8E44AD',border:'none',color:'#fff',fontSize:16,cursor:'pointer',fontWeight:700,boxShadow:'0 2px 6px rgba(142,68,173,0.35)'}}>⚖️</button>
+                        : <button onClick={()=>handleProductTap(prod)}
+                            style={{padding:'6px 10px',borderRadius:14,background:'#F3E5F5',border:'1.5px solid #8E44AD',color:'#8E44AD',fontSize:11,fontWeight:800,cursor:'pointer',whiteSpace:'nowrap'}}>
+                            ✏️ {lines.map(l=>`${l.qty} ${l.unit}`).join(' + ')}
+                          </button>)
+                    : (qty===0
+                        ? <button onClick={()=>addToCart(prod)}
+                            style={{width:34,height:34,borderRadius:'50%',background:G,border:'none',color:'#fff',fontSize:22,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,boxShadow:'0 2px 6px rgba(46,204,113,0.35)'}}>+</button>
+                        : <div style={{display:'flex',alignItems:'center',gap:5}}>
+                            <button onClick={()=>updateQty(inCart?.cartKey||prod.id,qty-1)}
+                              style={{width:28,height:28,borderRadius:'50%',background:'#eee',border:'none',cursor:'pointer',fontSize:16,fontWeight:700}}>−</button>
+                            <span style={{width:24,textAlign:'center',fontWeight:700,color:G,fontSize:14}}>{qty}</span>
+                            <button onClick={()=>updateQty(inCart?.cartKey||prod.id,qty+1)}
+                              style={{width:28,height:28,borderRadius:'50%',background:G,border:'none',color:'#fff',cursor:'pointer',fontSize:16,fontWeight:700}}>+</button>
+                          </div>)
                   }
                 </div>
               </div>
@@ -8902,7 +9223,7 @@ function Pembelian() {
             <div key={item.product.id} style={{padding:'10px 14px',borderBottom:'1px solid #f5f5f5'}}>
               <div style={{fontWeight:600,fontSize:12,marginBottom:6,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.product.name}</div>
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
-                <button onClick={()=>updateQty(item.product.id,item.qty-1)}
+                <button onClick={()=>updateQty(item.cartKey||item.product.id,item.qty-1)}
                   style={{width:24,height:24,borderRadius:'50%',background:'#eee',border:'none',cursor:'pointer',fontSize:14,fontWeight:700}}>−</button>
                 <span style={{fontWeight:700,color:G,minWidth:20,textAlign:'center'}}>{item.qty}</span>
                 <button onClick={()=>updateQty(item.cartKey||item.product.id,item.qty+1)}
