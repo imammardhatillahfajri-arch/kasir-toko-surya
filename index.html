@@ -1912,7 +1912,7 @@ function Transaksi() {
   const [showMobileCart, setShowMobileCart] = useState(false);
 
   const filtered = products.filter(p=>{
-    const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase());
+    const matchSearch = smartMatch(search, p.name, p.category||'');
     const matchMain   = activeCat==='Semua'   || getMain(p.category)===activeCat;
     const matchSub    = activeSub==='Semua'   || getSub(p.category)===activeSub;
     const matchBrand  = activeSub==='Semua'   || activeBrand==='Semua' || getBrand(p.category)===activeBrand;
@@ -2651,7 +2651,7 @@ function Manajemen() {
   },[]);
   useEffect(()=>{load();},[load]);
 
-  const filtered = products.filter(p=>p.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = products.filter(p=>smartMatch(search, p.name, p.category||''));
   const openEdit = (p) => { setEditId(p.id); setForm({
     name:p.name, price:p.price, buy_price:p.buy_price??"", stock:p.stock,
     unit_kecil:p.unit_kecil||"", unit_besar:p.unit_besar||"", konversi:p.konversi??"",
@@ -2788,7 +2788,7 @@ function ManajemenStok() {
   }, []);
   useEffect(()=>{load();},[load]);
 
-  const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = products.filter(p => smartMatch(search, p.name, p.category||''));
 
   const saveLog = async() => {
     if(!form.product_id || !form.qty) return alert('Pilih produk & isi qty!');
@@ -7742,6 +7742,17 @@ Harga jual saran: ${fmt(saran20)}`)) return;
 
 
 // ── PEMBELIAN ──────────────────────────────────────────────────────────────
+// ── Helper: pencarian pintar (multi-kata AND, abaikan simbol/tanda kutip) ───
+// "kawat petak 1x1" cocok dengan 'KAWAT PETAK 1"X1"90CM', tapi tidak dengan kawat lain
+function smartMatch(query, ...fields) {
+  const q = (query||'').toLowerCase().trim();
+  if(!q) return true;
+  const haySpaced = fields.join(' ').toLowerCase().replace(/[^a-z0-9]+/g,' ');
+  const haySquash = fields.join(' ').toLowerCase().replace(/[^a-z0-9]+/g,'');
+  return q.replace(/[^a-z0-9]+/g,' ').split(' ').filter(Boolean)
+    .every(t => haySpaced.includes(t) || haySquash.includes(t));
+}
+
 // ── Helper: catat arus kas ke tabel payments (basis tanggal uang berpindah) ─
 async function catatPembayaran({transaction_id=null, type='masuk', amount=0, method=null, note=''}) {
   if(!amount||amount<=0) return;
@@ -8322,21 +8333,22 @@ function EditPOView({po, onCancel, onSaved}) {
 }
 
 // ── MODAL MULTISATUAN PEMBELIAN (ala Kasir Pintar) ──────────────────────────
-function PembelianUnitModal({product, existing, onOk, onClose}) {
-  const [qtyKecil, setQtyKecil] = React.useState(existing?.kecil??'');
-  const [qtyBesar, setQtyBesar] = React.useState(existing?.besar??'');
-  const [harga, setHarga]       = React.useState(existing?.harga??(product.buy_price||''));
+function PembelianUnitModal({product, units, existing, onOk, onClose}) {
   const uk = product.unit_kecil||'pcs';
-  const ub = product.unit_besar||'unit besar';
-  const konv = product.konversi||1;
-  const totalKecil = (parseInt(qtyKecil)||0)+(parseInt(qtyBesar)||0)*konv;
-  const totalRp = totalKecil*(parseInt(harga)||0);
+  const [qtys, setQtys]   = React.useState(()=>units.map(()=>''));
+  const [harga, setHarga] = React.useState(existing?.harga??(product.buy_price||''));
+  const [hargaUnitIdx, setHargaUnitIdx] = React.useState(0); // satuan yang dipakai untuk input harga
+  const hargaRatio = units[hargaUnitIdx]?.ratio||1;
+  // Harga per satuan kecil (hasil konversi otomatis)
+  const hargaBase = hargaRatio>1 ? (parseFloat(harga)||0)/hargaRatio : (parseFloat(harga)||0);
+  const totalKecil = units.reduce((s,u,i)=>s+(parseInt(qtys[i])||0)*u.ratio,0);
+  const totalRp = Math.round(totalKecil*hargaBase);
 
   const ok = () => {
-    const k=parseInt(qtyKecil)||0, b=parseInt(qtyBesar)||0, h=parseInt(harga)||0;
-    if(k<=0&&b<=0) return alert('Isi jumlah minimal di salah satu satuan!');
-    if(h<=0) return alert('Isi harga beli per '+uk+'!');
-    onOk({qtyKecil:k, qtyBesar:b, harga:h});
+    const h = Math.round(hargaBase);
+    if(totalKecil<=0) return alert('Isi jumlah minimal di salah satu satuan!');
+    if(h<=0) return alert('Isi harga beli!');
+    onOk({rows: units.map((u,i)=>({name:u.name, ratio:u.ratio, qty:parseInt(qtys[i])||0})), harga:h});
   };
 
   return (
@@ -8355,18 +8367,36 @@ function PembelianUnitModal({product, existing, onOk, onClose}) {
           </div>
         </div>
 
-        {[[uk,qtyKecil,setQtyKecil,''],[ub+' ('+konv+' '+uk+')',qtyBesar,setQtyBesar,'']].map(([label,val,setter],i)=>(
+        {units.map((u,i)=>(
           <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <div style={{fontSize:14,fontWeight:600,textTransform:i===1?'uppercase':'none'}}>{label}</div>
-            <input type="number" min="0" value={val} placeholder="0"
-              onChange={e=>setter(e.target.value)}
+            <div style={{fontSize:14,fontWeight:600}}>
+              {u.name}
+              {u.ratio>1&&<span style={{fontSize:11,color:MT,fontWeight:500}}> ({u.ratio} {uk})</span>}
+            </div>
+            <input type="number" min="0" value={qtys[i]} placeholder="0"
+              onChange={e=>setQtys(q=>q.map((v,j)=>j===i?e.target.value:v))}
               style={{width:110,padding:'9px 12px',border:'1.5px solid #ddd',borderRadius:20,fontSize:15,fontWeight:700,textAlign:'center'}}/>
           </div>
         ))}
 
-        <div style={{fontSize:12,color:MT,fontWeight:600,marginTop:16,marginBottom:5}}>Harga beli per {uk}</div>
+        <div style={{fontSize:12,color:MT,fontWeight:600,marginTop:16,marginBottom:6}}>Input harga beli pakai satuan:</div>
+        <div style={{display:'flex',gap:6,marginBottom:8}}>
+          {units.map((u,i)=>(
+            <button key={i} onClick={()=>setHargaUnitIdx(i)}
+              style={{flex:1,padding:'7px 4px',border:`1.5px solid ${hargaUnitIdx===i?G:'#eee'}`,borderRadius:16,background:hargaUnitIdx===i?G:'#fff',color:hargaUnitIdx===i?'#fff':MT,fontSize:12,fontWeight:hargaUnitIdx===i?800:500,cursor:'pointer'}}>
+              per {u.name}
+            </button>
+          ))}
+        </div>
         <input type="number" min="0" value={harga} onChange={e=>setHarga(e.target.value)}
+          placeholder={'Harga per '+(units[hargaUnitIdx]?.name||uk)}
           style={{width:'100%',padding:'11px 14px',border:`1.8px solid ${G}`,borderRadius:10,fontSize:16,fontWeight:700,boxSizing:'border-box',textAlign:'center'}}/>
+        {hargaRatio>1&&(parseFloat(harga)||0)>0&&(
+          <div style={{background:'#FFF8E1',border:'1px solid #F9A825',borderRadius:8,padding:'7px 12px',marginTop:8,fontSize:12,textAlign:'center'}}>
+            🔄 Otomatis dikonversi: <b style={{color:GD}}>{fmt(Math.round(hargaBase))} / {uk}</b>
+            <span style={{color:MT}}> ({fmt(parseFloat(harga)||0)} ÷ {hargaRatio})</span>
+          </div>
+        )}
 
         {totalKecil>0&&(
           <div style={{background:GL,borderRadius:8,padding:'8px 12px',marginTop:10,fontSize:12,display:'flex',justifyContent:'space-between'}}>
@@ -8392,6 +8422,7 @@ function Pembelian() {
   const [products,   setProducts]   = useState([]);
   const [cart,       setCart]       = useState([]); // {product, qty, price, buy_price}
   const [poUnitSel,  setPoUnitSel]  = useState(null); // modal multisatuan pembelian
+  const [poUnits,    setPoUnits]    = useState({});   // product_id -> satuan tambahan
   const [orders,     setOrders]     = useState([]);
   const [selected,   setSelected]   = useState(null);
   const [loading,    setLoading]    = useState(false);
@@ -8427,7 +8458,16 @@ function Pembelian() {
   };
 
   // Load products dengan cache
+  const loadPoUnits = async() => {
+    try {
+      const units = await sbGetAll('product_units',{order:'id'});
+      const m = {};
+      (units||[]).forEach(u=>{ if(!m[u.product_id]) m[u.product_id]=[]; m[u.product_id].push(u); });
+      setPoUnits(m);
+    } catch(e){ setPoUnits({}); }
+  };
   const loadProducts = async() => {
+    loadPoUnits();
     if(window._cachedProducts?.length > 0) {
       setProducts(window._cachedProducts);
       return;
@@ -8454,29 +8494,43 @@ function Pembelian() {
   // Filter produk
   const filteredProds = products.filter(p=>{
     const matchKat = activeKat==='Semua' || p.category?.startsWith(activeKat);
-    const q = search.toLowerCase().trim();
-    const matchSearch = !q || q.split(/\s+/).some(w=>p.name.toLowerCase().includes(w));
+    const matchSearch = smartMatch(search, p.name, p.category||'');
     return matchKat && matchSearch;
   });
 
   // Cart helpers
-  // Produk multisatuan → buka modal; produk biasa → langsung tambah
+  // Susun daftar satuan produk: unit kecil + unit besar (kolom) + satuan tambahan (tabel product_units)
+  const getUnitList = (prod) => {
+    const uk = prod.unit_kecil||'pcs';
+    const list = [{name:uk, ratio:1}];
+    if(prod.unit_besar&&(prod.konversi||1)>1) list.push({name:prod.unit_besar, ratio:prod.konversi||1});
+    (poUnits[prod.id]||[]).forEach(u=>{
+      const r = u.ratio||1;
+      if(r>1&&!list.find(x=>x.name.toLowerCase()===String(u.unit_name||'').toLowerCase())) list.push({name:u.unit_name, ratio:r});
+    });
+    return list;
+  };
+  // Produk multisatuan → buka modal ala Kasir Pintar; produk biasa → langsung tambah
   const handleProductTap = (prod) => {
-    if(prod.unit_besar&&(prod.konversi||1)>1){
-      const kecil = cart.find(i=>i.cartKey===prod.id+'_kecil');
-      const besar = cart.find(i=>i.cartKey===prod.id+'_besar');
-      const hargaAwal = kecil?.price ?? (besar ? Math.round(besar.price/(prod.konversi||1)) : '');
-      setPoUnitSel({product:prod, existing:{kecil:kecil?.qty??'', besar:besar?.qty??'', harga:hargaAwal}});
+    const units = getUnitList(prod);
+    if(units.length>1){
+      const line = cart.find(i=>i.product.id===prod.id);
+      setPoUnitSel({product:prod, units, existing:{harga: line?.price ?? (prod.buy_price||''), qtyBase: ''}});
     } else {
       addToCart(prod);
     }
   };
-  const applyUnitSel = ({qtyKecil, qtyBesar, harga}) => {
+  // Total masuk keranjang dalam satuan dasar (seperti Kasir Pintar), rincian disimpan untuk tampilan
+  const applyUnitSel = ({rows, harga}) => {
     const p = poUnitSel.product;
+    const totalBase = rows.reduce((s,r)=>s+r.qty*r.ratio,0);
+    const rincian = rows.filter(r=>r.qty>0).map(r=>`${r.qty} ${r.name}`).join(' + ');
     setCart(prev=>{
       const next = prev.filter(i=>i.product.id!==p.id);
-      if(qtyKecil>0) next.push({product:p, cartKey:p.id+'_kecil', qty:qtyKecil, price:harga, unit:p.unit_kecil||'pcs', isBesar:false});
-      if(qtyBesar>0) next.push({product:p, cartKey:p.id+'_besar', qty:qtyBesar, price:harga*(p.konversi||1), unit:p.unit_besar, isBesar:true});
+      if(totalBase>0) next.push({
+        product:p, cartKey:p.id+'_kecil', qty:totalBase, price:harga,
+        unit:p.unit_kecil||'pcs', isBesar:false, _rincian:rincian,
+      });
       return next;
     });
     setPoUnitSel(null);
@@ -9038,17 +9092,18 @@ function Pembelian() {
       <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14}}>
         <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>Daftar Barang ({cart.length} item)</div>
         {cart.map(item=>(
-          <div key={item.product.id} style={{borderBottom:'1px solid #f5f5f5',paddingBottom:12,marginBottom:12}}>
-            <div style={{fontWeight:600,fontSize:13,marginBottom:6,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.product.name}</div>
+          <div key={item.cartKey||item.product.id} style={{borderBottom:'1px solid #f5f5f5',paddingBottom:12,marginBottom:12}}>
+            <div style={{fontWeight:600,fontSize:13,marginBottom:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.product.name}</div>
+            {item._rincian&&<div style={{fontSize:10,color:'#8E44AD',fontWeight:700,marginBottom:5}}>⚖️ {item._rincian} = {item.qty} {item.unit||'pcs'}</div>}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr auto',gap:8,alignItems:'center'}}>
               <div>
-                <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Beli (Rp)</label>
+                <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Beli / {item.unit||'pcs'}</label>
                 <input value={item.price} onChange={e=>updatePrice(item.product.id,e.target.value)}
                   type="number" min="0"
                   style={{width:'100%',padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
               </div>
               <div>
-                <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Qty</label>
+                <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Qty ({item.unit||'pcs'})</label>
                 <div style={{display:'flex',alignItems:'center',gap:6}}>
                   <button onClick={()=>updateQty(item.cartKey||item.product.id, item.qty-1)}
                     style={{width:30,height:30,borderRadius:'50%',background:'#F5F6FA',border:'1px solid #eee',cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>−</button>
@@ -9147,7 +9202,7 @@ function Pembelian() {
 
         {/* Product list */}
         <div style={{flex:1,overflowY:'auto'}}>
-          {poUnitSel&&<PembelianUnitModal product={poUnitSel.product} existing={poUnitSel.existing}
+          {poUnitSel&&<PembelianUnitModal product={poUnitSel.product} units={poUnitSel.units} existing={poUnitSel.existing}
             onOk={applyUnitSel} onClose={()=>setPoUnitSel(null)}/>}
           {prodLoading ? <Loading/> : filteredProds.length===0 ? (
             <div style={{textAlign:'center',padding:'48px 0',color:MT}}>
@@ -9155,7 +9210,7 @@ function Pembelian() {
               Produk tidak ditemukan
             </div>
           ) : filteredProds.map((prod,i)=>{
-            const isMulti = prod.unit_besar&&(prod.konversi||1)>1;
+            const isMulti = getUnitList(prod).length>1;
             const lines = cart.filter(c=>c.product.id===prod.id);
             const inCart = lines[0];
             const qty = inCart?.qty||0;
@@ -9183,7 +9238,7 @@ function Pembelian() {
                             style={{width:34,height:34,borderRadius:'50%',background:'#8E44AD',border:'none',color:'#fff',fontSize:16,cursor:'pointer',fontWeight:700,boxShadow:'0 2px 6px rgba(142,68,173,0.35)'}}>⚖️</button>
                         : <button onClick={()=>handleProductTap(prod)}
                             style={{padding:'6px 10px',borderRadius:14,background:'#F3E5F5',border:'1.5px solid #8E44AD',color:'#8E44AD',fontSize:11,fontWeight:800,cursor:'pointer',whiteSpace:'nowrap'}}>
-                            ✏️ {lines.map(l=>`${l.qty} ${l.unit}`).join(' + ')}
+                            ✏️ {lines[0]?._rincian||lines.map(l=>`${l.qty} ${l.unit}`).join(' + ')}
                           </button>)
                     : (qty===0
                         ? <button onClick={()=>addToCart(prod)}
@@ -9220,15 +9275,16 @@ function Pembelian() {
               <div style={{fontSize:11,marginTop:4}}>Klik produk di kiri untuk tambah</div>
             </div>
           ) : cart.map(item=>(
-            <div key={item.product.id} style={{padding:'10px 14px',borderBottom:'1px solid #f5f5f5'}}>
-              <div style={{fontWeight:600,fontSize:12,marginBottom:6,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.product.name}</div>
+            <div key={item.cartKey||item.product.id} style={{padding:'10px 14px',borderBottom:'1px solid #f5f5f5'}}>
+              <div style={{fontWeight:600,fontSize:12,marginBottom:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.product.name}</div>
+              {item._rincian&&<div style={{fontSize:10,color:'#8E44AD',fontWeight:700,marginBottom:4}}>⚖️ {item._rincian}</div>}
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
                 <button onClick={()=>updateQty(item.cartKey||item.product.id,item.qty-1)}
                   style={{width:24,height:24,borderRadius:'50%',background:'#eee',border:'none',cursor:'pointer',fontSize:14,fontWeight:700}}>−</button>
                 <span style={{fontWeight:700,color:G,minWidth:20,textAlign:'center'}}>{item.qty}</span>
                 <button onClick={()=>updateQty(item.cartKey||item.product.id,item.qty+1)}
                   style={{width:24,height:24,borderRadius:'50%',background:GL,border:`1px solid ${G}`,cursor:'pointer',fontSize:14,color:GD,fontWeight:700}}>+</button>
-                <span style={{color:MT,fontSize:11,marginLeft:4}}>×</span>
+                <span style={{color:MT,fontSize:11,marginLeft:4}}>{item.unit||'pcs'}</span>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:6}}>
                 <span style={{fontSize:11,color:MT}}>Harga beli:</span>
