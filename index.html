@@ -49,6 +49,8 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
+const APP_VERSION = "v13.07.2026-SMARTSEARCH";
+console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
 const sb = supabase.createClient(SB_URL, SB_KEY);
@@ -277,7 +279,7 @@ function LoginPage({onLogin}) {
             </div>
           </>
         )}
-        <div style={{textAlign:'center',marginTop:16,fontSize:11,color:'#ccc'}}>Surya Listrik © 2025</div>
+        <div style={{textAlign:'center',marginTop:16,fontSize:11,color:'#ccc'}}>Surya Listrik © 2025 · {APP_VERSION}</div>
       </div>
     </div>
   );
@@ -10000,7 +10002,7 @@ function Pengaturan({currentUser}) {
 
       {/* App Version */}
       <div style={{textAlign:'center',marginTop:20,fontSize:11,color:'#ccc'}}>
-        MyKasir App v1.0 · Surya Listrik © 2025
+        MyKasir App {APP_VERSION} · Surya Listrik © 2025
       </div>
     </div>
   );
