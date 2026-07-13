@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-FIX4";
+const APP_VERSION = "v14.07.2026-SEARCH2";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -206,6 +206,14 @@ function LoginPage({onLogin}) {
       const user = users?.[0];
       if(!user) { await sb.auth.signOut(); setError('Akun login ada, tapi belum terdaftar sebagai pengguna aplikasi. Hubungi admin.'); setLoading(false); return; }
       if(!user.is_active) { await sb.auth.signOut(); setError('Akun tidak aktif!'); setLoading(false); return; }
+      // Batas maksimal perangkat per akun
+      const dev = await registerDevice(email);
+      if(!dev.ok) {
+        await sb.auth.signOut();
+        const list = (dev.devices||[]).map(d=>`• ${d.device_name||'Perangkat'} (${(d.last_seen||d.created_at||'').slice(0,10)})`).join('\n');
+        setError(`Akun ini sudah terpakai di ${MAX_DEVICES} perangkat:\n${list}\nMinta admin reset perangkat di menu Pengguna, atau logout dari perangkat lama.`);
+        setLoading(false); return;
+      }
       if(user.pin) { setPendingUser(user); setMode('pin'); setPin(''); }
       else { setSession(user); onLogin(user); }
     } catch(e) { setError('Error: '+e.message); }
@@ -2859,11 +2867,11 @@ function ManajemenStok() {
               ))}
             </div>
           </div>
-          <select value={form.product_id} onChange={e=>setForm(f=>({...f,product_id:e.target.value}))}
-            style={{width:'100%', marginBottom:8, padding:'10px 12px', border:'1.5px solid #eee', borderRadius:8, fontSize:14, background:'#fff', boxSizing:'border-box'}}>
-            <option value="">-- Pilih Produk --</option>
-            {filtered.map(p=><option key={p.id} value={p.id}>{p.name} (Stok: {p.stock})</option>)}
-          </select>
+          <div style={{marginBottom:8}}>
+            <ProductSearchInput products={products} value={form.product_id}
+              placeholder="Cari nama produk..."
+              onSelect={p=>setForm(f=>({...f,product_id:p.id}))}/>
+          </div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8}}>
             <input value={form.qty} onChange={e=>setForm(f=>({...f,qty:e.target.value}))}
               placeholder={form.type==='opname'?'Stok aktual':'Jumlah'} type="number"
@@ -4018,11 +4026,9 @@ function ManajemenRetur() {
             {items.map((item,i)=>(
               <div key={i} style={{background:'#F5F6FA',borderRadius:10,padding:10,marginBottom:8}}>
                 <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr auto',gap:8,marginBottom:6}}>
-                  <select value={item.product_id} onChange={e=>selectProduct(i,e.target.value)}
-                    style={{padding:'8px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,background:'#fff'}}>
-                    <option value="">-- Pilih Produk --</option>
-                    {products.slice(0,100).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
+                  <ProductSearchInput products={products} value={item.product_id}
+                    placeholder="Cari produk..."
+                    onSelect={p=>selectProduct(i,p.id)}/>
                   <input value={item.qty} onChange={e=>updateItem(i,'qty',e.target.value)} type="number" min="1" placeholder="Qty"
                     style={{padding:'8px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
                   <input value={item.price} onChange={e=>updateItem(i,'price',e.target.value)} type="number" placeholder="Harga"
@@ -7756,6 +7762,101 @@ Harga jual saran: ${fmt(saran20)}`)) return;
 
 
 // ── PEMBELIAN ──────────────────────────────────────────────────────────────
+// ── Reusable: search produk dengan dropdown (ganti <select> produk) ───────────
+function ProductSearchInput({products, value, onSelect, placeholder='Cari nama produk...'}) {
+  const [q, setQ]           = React.useState('');
+  const [open, setOpen]     = React.useState(false);
+  const [focused, setFocus] = React.useState(false);
+  const ref = React.useRef(null);
+
+  // Tampilkan nama produk terpilih di input
+  const chosen = value ? products.find(p=>p.id===parseInt(value)||p.id===value) : null;
+
+  React.useEffect(()=>{
+    if(!focused) setQ(chosen?chosen.name:'');
+  },[value, focused, chosen]);
+
+  // Klik luar → tutup
+  React.useEffect(()=>{
+    const h = e=>{ if(ref.current&&!ref.current.contains(e.target)){ setOpen(false); setFocus(false); } };
+    document.addEventListener('mousedown',h);
+    return ()=>document.removeEventListener('mousedown',h);
+  },[]);
+
+  const results = React.useMemo(()=>{
+    if(!q.trim()) return products.slice(0,40);
+    return products.filter(p=>smartMatch(q,p.name,p.category||''))
+      .sort((a,b)=>smartScore(q,b.name)-smartScore(q,a.name)).slice(0,40);
+  },[q,products]);
+
+  return (
+    <div ref={ref} style={{position:'relative',flex:1}}>
+      <input value={q} placeholder={placeholder}
+        onChange={e=>{ setQ(e.target.value); setOpen(true); }}
+        onFocus={()=>{ setFocus(true); setQ(''); setOpen(true); }}
+        style={{width:'100%',padding:'8px 10px',border:'1.5px solid #ddd',borderRadius:8,fontSize:12,boxSizing:'border-box',background:'#fff'}}/>
+      {open&&(
+        <div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:'1.5px solid #ddd',borderRadius:8,boxShadow:'0 4px 16px rgba(0,0,0,0.13)',zIndex:900,maxHeight:220,overflowY:'auto',marginTop:2}}>
+          {results.length===0
+            ? <div style={{padding:'10px 12px',color:MT,fontSize:12}}>Tidak ada hasil</div>
+            : results.map(p=>(
+              <div key={p.id} onMouseDown={()=>{ onSelect(p); setQ(p.name); setOpen(false); setFocus(false); }}
+                style={{padding:'8px 12px',cursor:'pointer',fontSize:12,borderBottom:'1px solid #f5f5f5',background:value===p.id||value===String(p.id)?GL:'#fff'}}>
+                <div style={{fontWeight:600}}>{p.name}</div>
+                <div style={{fontSize:10,color:MT}}>Stok: {p.stock||0} · {p.category||'Umum'}</div>
+              </div>
+            ))
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Helper: pembatasan 2 perangkat per akun ─────────────────────────────────
+const MAX_DEVICES = 2;
+function getDeviceId() {
+  let id = localStorage.getItem('mykasir_device_id');
+  if(!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-'+Date.now()+'-'+Math.random().toString(36).slice(2));
+    localStorage.setItem('mykasir_device_id', id);
+  }
+  return id;
+}
+function getDeviceName() {
+  const ua = navigator.userAgent;
+  const os = /Android/i.test(ua)?'Android':/iPhone|iPad/i.test(ua)?'iPhone/iPad':/Windows/i.test(ua)?'Windows':/Mac/i.test(ua)?'Mac':'Perangkat';
+  const br = /Edg\//i.test(ua)?'Edge':/Chrome/i.test(ua)?'Chrome':/Firefox/i.test(ua)?'Firefox':/Safari/i.test(ua)?'Safari':'Browser';
+  return os+' · '+br;
+}
+// Daftarkan perangkat ini untuk email tsb. Return: {ok, devices}
+async function registerDevice(email) {
+  const devId = getDeviceId();
+  try {
+    const rows = await sbGet('user_devices',{eq:{email}});
+    const mine = (rows||[]).find(d=>d.device_id===devId);
+    if(mine) {
+      await sbUpdate('user_devices', mine.id, {last_seen:new Date().toISOString(), device_name:getDeviceName()}).catch(()=>{});
+      return {ok:true};
+    }
+    if((rows||[]).length >= MAX_DEVICES) return {ok:false, devices:rows};
+    await sbInsert('user_devices',[{email, device_id:devId, device_name:getDeviceName()}]);
+    return {ok:true};
+  } catch(e) {
+    // Tabel belum ada → jangan mengunci siapa pun, cukup peringatan di console
+    console.warn('user_devices belum ada — batas perangkat tidak aktif. Jalankan SQL migrasi.', e.message);
+    return {ok:true};
+  }
+}
+// Lepaskan slot perangkat ini saat logout
+async function releaseDevice(email) {
+  if(!email) return;
+  try {
+    const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+    await sbc.from('user_devices').delete().eq('email', email).eq('device_id', getDeviceId());
+  } catch(e){}
+}
+
 // ── Helper: pencarian pintar (multi-kata AND, abaikan simbol, toleran typo) ─
 // "kawat petak 1x1" cocok dengan 'KAWAT PETAK 1"X1"90CM'; "kabel" tetap ketemu walau diketik "kabel"/"kable"
 function lev1(a,b){ // beda maksimal 1 huruf (insert/delete/ganti)
@@ -10291,6 +10392,29 @@ function PengaturanUser({currentUser, onBack}) {
   const [editId, setEditId]   = useState(null);
   const [form, setForm]       = useState({email:'',username:'',nama:'',role:'kasir',pin:'',is_active:true});
   const [saving, setSaving]   = useState(false);
+  const [devMap, setDevMap]   = useState({}); // email -> daftar perangkat
+
+  const loadDevices = async() => {
+    try {
+      const rows = await sbGetAll('user_devices',{order:'last_seen',asc:false});
+      const m = {};
+      (rows||[]).forEach(d=>{ if(!m[d.email]) m[d.email]=[]; m[d.email].push(d); });
+      setDevMap(m);
+    } catch(e){ setDevMap({}); }
+  };
+
+  const resetDevices = async(u) => {
+    if(!u.email) return;
+    const devs = devMap[u.email]||[];
+    if(!devs.length) return alert('Belum ada perangkat terdaftar untuk akun ini.');
+    if(!confirm(`Reset perangkat untuk ${u.nama} (${u.email})?\n\n${devs.map(d=>'• '+(d.device_name||'Perangkat')).join('\n')}\n\nSemua slot dikosongkan — dia bisa login lagi dari perangkat mana pun (maks ${MAX_DEVICES}).`)) return;
+    try {
+      const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+      await sbc.from('user_devices').delete().eq('email', u.email);
+      loadDevices();
+      alert('✅ Perangkat direset. '+u.nama+' bisa login dari perangkat baru.');
+    } catch(e){ alert('Gagal: '+e.message); }
+  };
 
   const load = async()=>{
     setLoading(true);
@@ -10300,7 +10424,7 @@ function PengaturanUser({currentUser, onBack}) {
     } catch(e){ setUsers([]); }
     setLoading(false);
   };
-  useEffect(()=>{load();},[]);
+  useEffect(()=>{load();loadDevices();},[]);
 
   const save = async()=>{
     if(!form.email||!form.nama) return alert('Email & nama wajib!');
@@ -10385,6 +10509,17 @@ function PengaturanUser({currentUser, onBack}) {
                   {u.id===currentUser?.id&&<span style={{fontSize:10,background:G,color:'#fff',borderRadius:4,padding:'1px 6px',marginLeft:4}}>Anda</span>}
                 </div>
                 <div style={{fontSize:12,color:MT,marginTop:2}}>{u.email||('@'+u.username)} · {u.role==='admin'?'Admin':'Kasir'}</div>
+                {(devMap[u.email]||[]).length>0&&(
+                  <div style={{display:'flex',alignItems:'center',gap:6,marginTop:4,flexWrap:'wrap'}}>
+                    <span style={{fontSize:10,fontWeight:700,color:'#8E44AD',background:'#F3E5F5',borderRadius:5,padding:'2px 8px'}}>
+                      📱 {(devMap[u.email]||[]).length}/{MAX_DEVICES}: {(devMap[u.email]||[]).map(d=>d.device_name||'?').join(', ')}
+                    </span>
+                    <button onClick={(e)=>{e.stopPropagation();resetDevices(u);}}
+                      style={{fontSize:10,fontWeight:700,color:RD,background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:5,padding:'2px 8px',cursor:'pointer'}}>
+                      🔓 Reset
+                    </button>
+                  </div>
+                )}
                 <div style={{fontSize:11,color:u.is_active?GD:RD}}>{u.is_active?'✅ Aktif':'❌ Nonaktif'}</div>
               </div>
               <div style={{display:'flex',gap:6}}>
@@ -10479,7 +10614,11 @@ function App() {
   },[]);
 
   const handleLogin = (user) => { setCurrentUser(user); setPage(user.role==='kasir'?'transaksi':'dashboard'); };
-  const handleLogout = () => { sb.auth.signOut().catch(()=>{}); clearSession(); setCurrentUser(null); setPage("dashboard"); };
+  const handleLogout = () => {
+    releaseDevice(currentUser?.email).catch(()=>{});
+    sb.auth.signOut().catch(()=>{});
+    clearSession(); setCurrentUser(null); setPage("dashboard");
+  };
 
   // Tampilkan login page kalau belum login
   if(!currentUser) return <LoginPage onLogin={handleLogin}/>;
