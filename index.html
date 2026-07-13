@@ -3,6 +3,14 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<link rel="manifest" href="/manifest.json"/>
+<meta name="theme-color" content="#2ecc71"/>
+<link rel="icon" href="/icons/icon-192.png"/>
+<link rel="apple-touch-icon" href="/icons/icon-192.png"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="MyKasir"/>
 <title>MyKasir App</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -49,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v13.07.2026-SMARTSEARCH";
+const APP_VERSION = "v13.07.2026-PWA";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -8356,7 +8364,7 @@ function PembelianUnitModal({product, units, existing, onOk, onClose}) {
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
       onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:400,boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:400,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
         <div style={{fontWeight:900,fontSize:16,textAlign:'center',marginBottom:14,letterSpacing:0.5}}>TAMBAH MULTISATUAN</div>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',borderBottom:'1px solid #eee',paddingBottom:10,marginBottom:16}}>
           <div style={{flex:1,minWidth:0}}>
