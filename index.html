@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-SEARCH2";
+const APP_VERSION = "v14.07.2026-BLUETOOTH";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -636,6 +636,31 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   const [rangkap, setRangkap]         = useState(1);
   const [showMenu, setShowMenu]       = useState(false);
   const [deleting, setDeleting]       = useState(false);
+  const [btPrinting, setBtPrinting]   = useState(false);
+  const [btStatus, setBtStatus]       = useState('');
+
+  const printBluetooth = async() => {
+    setBtPrinting(true); setBtStatus('');
+    try {
+      if(!window.BTPrinter.isConnected()) {
+        setBtStatus('📡 Pilih printer di dialog...');
+        const name = await window.BTPrinter.connect();
+        setBtStatus('✅ Terhubung: '+name);
+      }
+      const text = buildStrukEscPos({
+        toko: tokoNama, alamat: tokoAlamat, telp: tokoTelp,
+        invoice, tgl, jam, customer, kasir: kasirName,
+        items: cart.map(i=>({name:i.name,qty:i.qty,price:i.price,unit:i.unit||'pcs'})),
+        total, diskon: 0, pajak: 0, paid: paidNum, change,
+        status, dueDate: jatusTempo, kodeUnik,
+      });
+      await window.BTPrinter.printText(text);
+      setBtStatus('✅ Berhasil dicetak!');
+    } catch(e) {
+      setBtStatus('❌ '+e.message);
+    }
+    setBtPrinting(false);
+  };
 
   const tokoNama    = window.TOKO_NAMA    || 'SURYA LISTRIK';
   const tokoTagline = window.TOKO_TAGLINE || 'Toko Alat Listrik & Bangunan';
@@ -1061,6 +1086,14 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
                 <div style={{fontSize:18,marginBottom:3}}>🖨️</div>
                 <div style={{fontWeight:700,fontSize:11,color:GD}}>Cetak A5</div>
               </button>
+              <button onClick={printBluetooth} disabled={btPrinting}
+                style={{gridColumn:'span 2',padding:'10px 6px',background:btPrinting?'#eee':'#EDE7F6',border:`1.5px solid #7B1FA2`,borderRadius:12,cursor:'pointer',textAlign:'center'}}>
+                <div style={{fontSize:18,marginBottom:3}}>{btPrinting?'⏳':'🔵'}</div>
+                <div style={{fontWeight:700,fontSize:11,color:'#7B1FA2'}}>
+                  {btPrinting?'Mencetak...':window.BTPrinter?.isConnected()?'Cetak ke '+(window.BTPrinter.savedName()||'Printer BT'):'Cetak Printer Bluetooth'}
+                </div>
+              </button>
+              {btStatus&&<div style={{gridColumn:'span 2',fontSize:11,textAlign:'center',color:btStatus.startsWith('❌')?RD:GD,fontWeight:600}}>{btStatus}</div>}
             </div>
           )}
 
@@ -7857,6 +7890,142 @@ async function releaseDevice(email) {
   } catch(e){}
 }
 
+// ── PRINTER THERMAL BLUETOOTH (ESC/POS via Web Bluetooth) ───────────────────
+// Auto-deteksi: mencoba beberapa service/characteristic UUID yang umum dipakai
+// printer thermal 58mm/80mm bluetooth (Goojprt, Xprinter, iPrt, dan sejenisnya),
+// lalu mencari characteristic yang bisa ditulis (write / writeWithoutResponse).
+const BT_COMMON_SERVICES = [
+  '000018f0-0000-1000-8000-00805f9b34fb', // paling umum dipakai printer klon 58mm
+  '0000ff00-0000-1000-8000-00805f9b34fb', // varian lain yang sering dipakai
+  '49535343-fe7d-4ae5-8fa9-9fafd205e455', // varian modul serial BLE (mis. beberapa Xprinter)
+];
+window.BTPrinter = {
+  device: null, char: null,
+
+  isSupported() { return !!navigator.bluetooth; },
+
+  async connect() {
+    if(!navigator.bluetooth) throw new Error('Browser ini tidak mendukung Bluetooth (pakai Chrome di Android/Desktop).');
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: BT_COMMON_SERVICES,
+    });
+    const server = await device.gatt.connect();
+    let foundChar = null;
+    // Coba service yang dikenal dulu
+    for(const svcId of BT_COMMON_SERVICES) {
+      try {
+        const svc = await server.getPrimaryService(svcId);
+        const chars = await svc.getCharacteristics();
+        foundChar = chars.find(c=>c.properties.write||c.properties.writeWithoutResponse) || foundChar;
+        if(foundChar) break;
+      } catch(e){ /* service ini tidak ada di printer ini, coba berikutnya */ }
+    }
+    // Fallback: telusuri SEMUA service yang di-expose (butuh browser yang izinkan getPrimaryServices tanpa filter)
+    if(!foundChar) {
+      try {
+        const services = await server.getPrimaryServices();
+        for(const svc of services) {
+          const chars = await svc.getCharacteristics();
+          const w = chars.find(c=>c.properties.write||c.properties.writeWithoutResponse);
+          if(w){ foundChar = w; break; }
+        }
+      } catch(e){}
+    }
+    if(!foundChar) {
+      device.gatt.disconnect();
+      throw new Error('Printer terhubung tapi tidak ditemukan jalur cetak yang cocok. Printer ini mungkin pakai protokol berbeda — coba cek nama/manual printer.');
+    }
+    this.device = device;
+    this.char = foundChar;
+    localStorage.setItem('mykasir_printer_name', device.name||'Printer Bluetooth');
+    device.addEventListener('gattserverdisconnected', ()=>{ this.char=null; });
+    return device.name||'Printer';
+  },
+
+  async ensureConnected() {
+    if(this.char && this.device?.gatt?.connected) return true;
+    await this.connect();
+    return true;
+  },
+
+  async writeRaw(bytes) {
+    // Kirim per-potong (banyak printer BLE murah punya batas ~150-180 byte per write)
+    const CHUNK = 150;
+    for(let i=0;i<bytes.length;i+=CHUNK) {
+      const chunk = bytes.slice(i,i+CHUNK);
+      if(this.char.properties.writeWithoutResponse) await this.char.writeValueWithoutResponse(chunk);
+      else await this.char.writeValue(chunk);
+      await new Promise(r=>setTimeout(r,20));
+    }
+  },
+
+  async printText(text) {
+    await this.ensureConnected();
+    const enc = new TextEncoder();
+    const init = new Uint8Array([0x1B,0x40]); // ESC @  → reset printer
+    const cut  = new Uint8Array([0x1D,0x56,0x00]); // GS V 0 → potong kertas (full cut)
+    const feed = new Uint8Array([0x1B,0x64,0x03]); // feed 3 baris sebelum potong
+    const body = enc.encode(text);
+    const payload = new Uint8Array(init.length+body.length+feed.length+cut.length);
+    payload.set(init,0);
+    payload.set(body,init.length);
+    payload.set(feed,init.length+body.length);
+    payload.set(cut,init.length+body.length+feed.length);
+    await this.writeRaw(payload);
+  },
+
+  disconnect() {
+    try{ this.device?.gatt?.disconnect(); }catch(e){}
+    this.device=null; this.char=null;
+  },
+
+  isConnected() { return !!(this.char && this.device?.gatt?.connected); },
+  savedName() { return localStorage.getItem('mykasir_printer_name')||null; },
+};
+
+// ── ESC/POS text builder: struk 58mm (32 kolom) dari data transaksi kasir ───
+function buildStrukEscPos({toko, alamat, telp, invoice, tgl, jam, customer, kasir, items, total, diskon, pajak, paid, change, status, dueDate, catatan, kodeUnik}) {
+  const W = 32; // lebar karakter untuk kertas 58mm font normal
+  const line = ch=>ch.repeat(W)+'\n';
+  const center = s => { s=String(s); const pad=Math.max(0,Math.floor((W-s.length)/2)); return ' '.repeat(pad)+s+'\n'; };
+  const two = (l,r) => { l=String(l); r=String(r); const sp=Math.max(1,W-l.length-r.length); return l+' '.repeat(sp)+r+'\n'; };
+  const wrap = (s,w) => { const out=[]; s=String(s); while(s.length>w){ out.push(s.slice(0,w)); s=s.slice(w);} out.push(s); return out; };
+
+  let t = '';
+  t += center(toko.toUpperCase());
+  if(alamat) wrap(alamat,W).forEach(l=>t+=center(l));
+  if(telp)   t += center('Telp: '+telp);
+  t += line('=');
+  t += `${invoice}\n`;
+  t += two(tgl, jam);
+  t += `Kasir: ${kasir||'-'}\n`;
+  t += `Plgn : ${customer||'Umum'}\n`;
+  t += line('-');
+  items.forEach(it=>{
+    wrap(it.name,W).forEach(l=>t+=l+'\n');
+    t += two(`${it.qty} ${it.unit||'pcs'} x ${fmt(it.price).replace('Rp ','')}`, fmt(it.qty*it.price).replace('Rp ',''));
+  });
+  t += line('-');
+  t += two('Subtotal', fmt(items.reduce((s,i)=>s+i.qty*i.price,0)));
+  if(diskon>0) t += two('Diskon', '-'+fmt(diskon));
+  if(pajak>0)  t += two('Pajak', fmt(pajak));
+  t += two('TOTAL', fmt(total));
+  t += two('Bayar', fmt(paid));
+  if(status==='Piutang') {
+    t += two('Sisa', fmt(total-paid));
+    if(dueDate) t += `Jatuh tempo: ${dueDate}\n`;
+  } else {
+    t += two('Kembali', fmt(Math.max(0,change)));
+  }
+  t += line('=');
+  if(catatan) { wrap(catatan,W).forEach(l=>t+=l+'\n'); t+=line('-'); }
+  t += center('Terima kasih!');
+  if(kodeUnik) t += center(kodeUnik);
+  t += '\n\n\n';
+  return t;
+}
+
 // ── Helper: pencarian pintar (multi-kata AND, abaikan simbol, toleran typo) ─
 // "kawat petak 1x1" cocok dengan 'KAWAT PETAK 1"X1"90CM'; "kabel" tetap ketemu walau diketik "kabel"/"kable"
 function lev1(a,b){ // beda maksimal 1 huruf (insert/delete/ganti)
@@ -9651,6 +9820,91 @@ function Shift() {
 
 
 // ── PENGATURAN PRINTER & STRUK ─────────────────────────────────────────────
+// ── PANEL PAIRING PRINTER BLUETOOTH ──────────────────────────────────────────
+function BluetoothPrinterPanel() {
+  const [status, setStatus]   = useState('');
+  const [busy, setBusy]       = useState(false);
+  const [savedName, setSavedName] = useState(window.BTPrinter?.savedName());
+  const supported = window.BTPrinter?.isSupported();
+
+  const connect = async() => {
+    setBusy(true); setStatus('📡 Pilih printer di dialog Bluetooth...');
+    try {
+      const name = await window.BTPrinter.connect();
+      setSavedName(name);
+      setStatus('✅ Terhubung dengan '+name);
+    } catch(e){ setStatus('❌ '+e.message); }
+    setBusy(false);
+  };
+
+  const testPrint = async() => {
+    setBusy(true); setStatus('🖨️ Mencetak tes...');
+    try {
+      await window.BTPrinter.printText(
+        '================================\n'+
+        '        TES PRINTER\n'+
+        '================================\n'+
+        'Jika teks ini tercetak dengan\n'+
+        'rapi, printer sudah siap dipakai\n'+
+        'untuk mencetak struk transaksi.\n\n'+
+        (window.TOKO_NAMA||'SURYA LISTRIK')+'\n\n\n'
+      );
+      setStatus('✅ Tes cetak terkirim! Cek hasilnya di printer.');
+    } catch(e){ setStatus('❌ '+e.message); }
+    setBusy(false);
+  };
+
+  const forget = () => {
+    window.BTPrinter.disconnect();
+    localStorage.removeItem('mykasir_printer_name');
+    setSavedName(null);
+    setStatus('Perangkat dilupakan. Silakan hubungkan ulang.');
+  };
+
+  return (
+    <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:16,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',border:'1.5px solid #EDE7F6'}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:'#7B1FA2'}}>🔵 Printer Thermal Bluetooth</div>
+      <div style={{fontSize:11,color:MT,marginBottom:12}}>
+        Hubungkan printer thermal 58mm via Bluetooth untuk cetak struk langsung tanpa dialog print browser. Hanya didukung Chrome di Android/Desktop (tidak di iPhone/Safari).
+      </div>
+
+      {!supported ? (
+        <div style={{background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,padding:'10px 12px',fontSize:12,color:RD}}>
+          ⚠️ Browser ini tidak mendukung Web Bluetooth. Buka lewat Chrome di Android atau Desktop.
+        </div>
+      ) : (
+        <>
+          {savedName&&(
+            <div style={{background:GL,border:`1px solid ${G}`,borderRadius:8,padding:'8px 12px',fontSize:12,color:GD,fontWeight:600,marginBottom:10}}>
+              📎 Tersimpan: {savedName}
+            </div>
+          )}
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <button onClick={connect} disabled={busy}
+              style={{padding:'9px 16px',background:busy?'#eee':'#7B1FA2',color:'#fff',border:'none',borderRadius:8,fontWeight:700,fontSize:12,cursor:'pointer'}}>
+              {savedName?'🔄 Hubungkan Ulang':'🔗 Hubungkan Printer'}
+            </button>
+            <button onClick={testPrint} disabled={busy}
+              style={{padding:'9px 16px',background:busy?'#eee':'#E3F2FD',color:'#1976D2',border:'1.5px solid #3498DB',borderRadius:8,fontWeight:700,fontSize:12,cursor:'pointer'}}>
+              🖨️ Tes Cetak
+            </button>
+            {savedName&&(
+              <button onClick={forget} disabled={busy}
+                style={{padding:'9px 16px',background:'#fff',color:RD,border:`1.5px solid ${RD}`,borderRadius:8,fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                🗑️ Lupakan
+              </button>
+            )}
+          </div>
+          {status&&<div style={{marginTop:10,fontSize:12,fontWeight:600,color:status.startsWith('❌')?RD:GD}}>{status}</div>}
+          <div style={{fontSize:10,color:MT,marginTop:10,lineHeight:1.5}}>
+            💡 Kalau gagal terhubung: pastikan printer sudah menyala & dalam mode pairing, coba tekan "Hubungkan Printer" lagi. Kalau tetap gagal setelah connect (tes cetak error), kemungkinan printer pakai protokol berbeda dari yang didukung — laporkan merk/tipe printernya.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PengaturanPrinter({onBack}) {
   const [form, setForm] = useState({
     printer_ukuran:  '58mm',
@@ -9717,6 +9971,9 @@ function PengaturanPrinter({onBack}) {
         <button onClick={onBack} style={{background:GL,border:`1px solid ${G}`,borderRadius:8,padding:'6px 12px',cursor:'pointer',fontWeight:700,color:GD}}>← Kembali</button>
         <h2 style={{margin:0,fontSize:17,fontWeight:800}}>🖨️ Pengaturan Printer & Struk</h2>
       </div>
+
+      {/* ── PANEL PRINTER BLUETOOTH ── */}
+      <BluetoothPrinterPanel/>
 
       {loading ? <Loading/> : (
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,alignItems:'start'}}>
