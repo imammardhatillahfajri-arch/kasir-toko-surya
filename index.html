@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-BLUETOOTH";
+const APP_VERSION = "v14.07.2026-POFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3169,6 +3169,88 @@ function ManajemenSupplier() {
 // ── HUTANG PIUTANG ─────────────────────────────────────────────────────────
 
 // ── PO HUTANG ITEM COMPONENT ──────────────────────────────────────────────
+// ── Helper: nomor referensi pembayaran (format timestamp ala Kasir Pintar) ──
+function genRefNo() {
+  const d = new Date();
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// ── Cetak Invoice Pembelian PO (dipakai di detail PO & di Hutang Supplier) ──
+function printInvoicePO(po) {
+  const tokoNama = window.TOKO_NAMA||'SURYA LISTRIK';
+  const tokoAlamat = window.TOKO_ALAMAT||'';
+  const tokoTelp = window.TOKO_TELP||'';
+  const items = po.items||[];
+  const total = po.total||0;
+  const w = window.open('','_blank','width=800,height=600');
+  w.document.write(`<!DOCTYPE html><html><head><title>Invoice PO-${po.id}</title>
+  <style>
+    body{font-family:Arial,sans-serif;padding:30px;color:#222;max-width:700px;margin:0 auto}
+    h1{color:#1a472a;font-size:22px;margin:0}
+    .header{display:flex;justify-content:space-between;border-bottom:3px solid #1a472a;padding-bottom:16px;margin-bottom:20px}
+    .badge{background:#E8F5E9;color:#1a472a;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700}
+    table{width:100%;border-collapse:collapse;margin:16px 0}
+    th{background:#1a472a;color:#fff;padding:10px 12px;text-align:left;font-size:13px}
+    td{padding:9px 12px;border-bottom:1px solid #eee;font-size:13px}
+    tr:nth-child(even){background:#f9f9f9}
+    .total-row{font-weight:800;font-size:15px;border-top:2px solid #1a472a}
+    .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;background:#F5F6FA;padding:14px;border-radius:8px}
+    .info-item label{font-size:11px;color:#777;display:block;margin-bottom:2px}
+    .info-item span{font-weight:600;font-size:13px}
+    .footer{text-align:center;margin-top:30px;padding-top:16px;border-top:1px dashed #ccc;color:#777;font-size:12px}
+    @media print{body{padding:10px}button{display:none}}
+  </style></head><body>
+  <div class="header">
+    <div>
+      <h1>${tokoNama}</h1>
+      <div style="font-size:12px;color:#777;margin-top:4px">${tokoAlamat}</div>
+      <div style="font-size:12px;color:#777">Telp: ${tokoTelp}</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:18px;font-weight:800;color:#1a472a">INVOICE PEMBELIAN</div>
+      <div style="font-size:13px;color:#777;margin-top:4px">No: PO-${po.id}</div>
+      <div class="badge">${po.bayar==='Lunas'?'Lunas':'Belum Lunas'}</div>
+    </div>
+  </div>
+  <div class="info-grid">
+    <div class="info-item"><label>Supplier</label><span>${po.supplier}</span></div>
+    <div class="info-item"><label>Status Bayar</label><span>${po.bayar}</span></div>
+    <div class="info-item"><label>Tanggal PO</label><span>${po.created_at?.slice(0,10)||'-'}</span></div>
+    <div class="info-item"><label>Jatuh Tempo</label><span>${po.due_date||'Tidak ada'}</span></div>
+  </div>
+  <table>
+    <thead><tr><th>#</th><th>Nama Produk</th><th style="text-align:center">Qty</th><th style="text-align:right">Harga</th><th style="text-align:right">Subtotal</th></tr></thead>
+    <tbody>
+      ${items.map((item,i)=>`
+        <tr>
+          <td>${i+1}</td>
+          <td>${item.name}</td>
+          <td style="text-align:center">${item.qty} ${item.satuan||'pcs'}</td>
+          <td style="text-align:right">Rp ${(item.price||0).toLocaleString('id-ID')}</td>
+          <td style="text-align:right">Rp ${((item.qty||0)*(item.price||0)).toLocaleString('id-ID')}</td>
+        </tr>
+      `).join('')}
+      <tr class="total-row">
+        <td colspan="4" style="text-align:right">TOTAL</td>
+        <td style="text-align:right;color:#1a472a">Rp ${total.toLocaleString('id-ID')}</td>
+      </tr>
+    </tbody>
+  </table>
+  ${po.paid>0?`<div style="background:#E8F5E9;padding:10px 14px;border-radius:8px;font-size:12px;margin-top:12px">💳 Sudah dibayar: Rp ${(po.paid||0).toLocaleString('id-ID')} · Sisa: Rp ${(total-(po.paid||0)).toLocaleString('id-ID')}</div>`:''}
+  ${po.notes?`<div style="background:#FFF3E0;padding:10px 14px;border-radius:8px;font-size:12px;margin-top:12px">📝 ${po.notes}</div>`:''}
+  <div class="footer">
+    <div>${tokoNama} · ${tokoAlamat} · ${tokoTelp}</div>
+    <div style="margin-top:4px">Dicetak: ${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</div>
+  </div>
+  <div style="text-align:center;margin-top:20px">
+    <button onclick="window.print()" style="padding:10px 30px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Invoice</button>
+  </div>
+  </body></html>`);
+  w.document.close();
+  w.focus();
+}
+
 function POHutangItem({po, today, load}) {
   const [showItems, setShowItems] = useState(false);
   const isLunas = po.status==='Lunas';
@@ -3258,6 +3340,204 @@ Total hutang: ${fmt(po.total)}`);
   );
 }
 
+// ── LEVEL 2: Detail Supplier — daftar transaksi hutang milik 1 supplier ─────
+function HutangSupplierDetail({supplier, onBack, onOpenTx, onLunasiSekaligus, onBuatHutang}) {
+  const [periode, setPeriode] = useState('semua');
+  const [statusF, setStatusF] = useState('belum');
+  const today = new Date().toISOString().slice(0,10);
+
+  const items = supplier.items.filter(it=>{
+    if(statusF==='belum' && it.status!=='Belum Lunas') return false;
+    if(statusF==='lunas' && it.status!=='Lunas') return false;
+    if(periode!=='semua'){
+      const tgl = it.created_at?.slice(0,10)||'';
+      const bulanIni = today.slice(0,7);
+      if(periode==='bulan_ini' && tgl.slice(0,7)!==bulanIni) return false;
+      if(periode==='3bulan'){
+        const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth()-3);
+        if(tgl < cutoff.toISOString().slice(0,10)) return false;
+      }
+    }
+    return true;
+  });
+
+  return (
+    <div>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,fontSize:14,cursor:'pointer',padding:0,marginBottom:14,display:'flex',alignItems:'center',gap:6}}>
+        ← Hutang
+      </button>
+
+      <div style={{background:'linear-gradient(135deg,#FFF3D6,#F3E5F5)',borderRadius:14,padding:'16px 18px',marginBottom:14}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+          <span style={{fontSize:20}}>🏭</span>
+          <span style={{fontWeight:800,fontSize:17}}>{supplier.name}</span>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between'}}>
+          <div>
+            <div style={{fontSize:12,color:MT}}>Total Hutang</div>
+            <div style={{fontWeight:800,fontSize:19,color:RD}}>{fmt(supplier.totalSisa)}</div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontSize:12,color:MT}}>Total Transaksi</div>
+            <div style={{fontWeight:800,fontSize:19}}>{supplier.items.length}</div>
+          </div>
+        </div>
+      </div>
+
+      {supplier.totalSisa>0&&(
+        <button onClick={onLunasiSekaligus}
+          style={{width:'100%',padding:'13px 0',background:G,color:'#fff',border:'none',borderRadius:28,fontWeight:800,fontSize:14,cursor:'pointer',marginBottom:16}}>
+          Lunasi Sekaligus
+        </button>
+      )}
+
+      <div style={{display:'flex',gap:8,marginBottom:12}}>
+        <select value={periode} onChange={e=>setPeriode(e.target.value)}
+          style={{flex:1,padding:'10px 12px',border:'1.5px solid #ddd',borderRadius:10,fontSize:12,background:'#fff'}}>
+          <option value="semua">📅 Semua Transaksi</option>
+          <option value="bulan_ini">Bulan Ini</option>
+          <option value="3bulan">3 Bulan Terakhir</option>
+        </select>
+        <select value={statusF} onChange={e=>setStatusF(e.target.value)}
+          style={{flex:1,padding:'10px 12px',border:'1.5px solid #ddd',borderRadius:10,fontSize:12,background:'#fff'}}>
+          <option value="semua">Semua Status</option>
+          <option value="belum">Belum Lunas</option>
+          <option value="lunas">Lunas</option>
+        </select>
+      </div>
+
+      <button onClick={onBuatHutang}
+        style={{width:'100%',padding:13,background:'#FFF0F0',border:`1.5px solid ${RD}`,borderRadius:24,color:RD,fontWeight:700,fontSize:14,cursor:'pointer',marginBottom:18}}>
+        Buat Hutang
+      </button>
+
+      <div style={{fontWeight:800,fontSize:15,marginBottom:10}}>Daftar Transaksi</div>
+      {items.length===0 ? (
+        <div style={{textAlign:'center',color:MT,fontSize:13,padding:24,background:'#fff',borderRadius:12}}>Tidak ada transaksi</div>
+      ) : items.map((it,i)=>{
+        const lunas = it.status==='Lunas';
+        const overdue = !lunas && it.due_date && it.due_date<today;
+        return (
+          <div key={it.key} onClick={()=>onOpenTx(it)}
+            style={{background:'#fff',borderRadius:12,padding:'13px 16px',marginBottom:8,boxShadow:'0 1px 6px rgba(0,0,0,0.06)',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'flex-start',borderBottom:i<items.length-1?'none':'none'}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:13,color:G}}>{it.created_at?.slice(0,10)||'-'}</div>
+              <div style={{fontSize:12,color:TX,marginTop:2}}>{lunas?'Lunas':'Belum Dibayar'}</div>
+              {it.due_date&&<div style={{fontSize:11,color:overdue?RD:MT,marginTop:2}}>{overdue?'🚨':''} Jatuh Tempo {it.due_date}</div>}
+              {it.source==='po'&&<div style={{fontSize:10,color:'#8E44AD',marginTop:2,fontWeight:600}}>📦 PO-{it.id}</div>}
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:12,fontWeight:700,color:lunas?GD:RD}}>{lunas?'Lunas':'Belum lunas'}</div>
+              <div style={{fontWeight:800,fontSize:15,color:RD,marginTop:2}}>{fmt(it.sisa)}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── LEVEL 3: Detail Transaksi Hutang — riwayat pembayaran ───────────────────
+function HutangTxDetail({item, payments, payAmount, setPayAmount, paying, onBack, onBayar, onHapusPembayaran}) {
+  const [showPayForm, setShowPayForm] = useState(false);
+  const lunas = item.status==='Lunas';
+  let running = 0;
+
+  return (
+    <div>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,fontSize:14,cursor:'pointer',padding:0,marginBottom:14,display:'flex',alignItems:'center',gap:6}}>
+        ← Hutang
+      </button>
+
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+        <span style={{fontSize:18}}>🏭</span>
+        <span style={{fontWeight:800,fontSize:17}}>{item.supplier}</span>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:16}}>
+        <span style={{width:9,height:9,borderRadius:'50%',background:lunas?G:RD,display:'inline-block'}}/>
+        <span style={{fontWeight:700,fontSize:14,color:lunas?GD:RD}}>{lunas?'Lunas':'Belum lunas'}</span>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <div>
+          <div style={{fontSize:12,color:MT}}>Tanggal Transaksi</div>
+          <div style={{fontWeight:700,fontSize:14,marginTop:2}}>{item.created_at?.slice(0,16).replace('T',' ')||'-'}</div>
+        </div>
+        <div>
+          <div style={{fontSize:12,color:MT}}>Jatuh Tempo</div>
+          <div style={{fontWeight:700,fontSize:14,marginTop:2}}>{item.due_date||'-'}</div>
+        </div>
+        <div>
+          <div style={{fontSize:12,color:MT}}>Total</div>
+          <div style={{fontWeight:700,fontSize:14,marginTop:2}}>{fmt(item.total)}</div>
+        </div>
+        <div>
+          <div style={{fontSize:12,color:MT}}>Belum dibayar</div>
+          <div style={{fontWeight:800,fontSize:15,marginTop:2,color:lunas?GD:RD}}>{fmt(item.sisa)}</div>
+        </div>
+      </div>
+
+      {item.source==='po' ? (
+        <button onClick={()=>printInvoicePO(item.raw)}
+          style={{width:'100%',padding:'13px 16px',background:'#F5F6FA',border:'none',borderRadius:12,fontWeight:600,fontSize:13,cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+          <span>Lihat Detail Invoice PO</span><span>›</span>
+        </button>
+      ) : item.description ? (
+        <div style={{background:'#F5F6FA',borderRadius:12,padding:'13px 16px',marginBottom:20,fontSize:12,color:MT}}>
+          📝 {item.description}
+        </div>
+      ) : null}
+
+      <div style={{fontWeight:800,fontSize:15,textAlign:'center',marginBottom:12}}>History pembayaran</div>
+      {payments.length===0 ? (
+        <div style={{textAlign:'center',color:MT,fontSize:12,padding:16}}>Belum ada pembayaran</div>
+      ) : payments.map((p,i)=>{
+        running += p.amount||0;
+        const sisaSetelah = Math.max(0, item.total-running);
+        return (
+          <div key={p.id||i} style={{background:GL,borderRadius:12,padding:14,marginBottom:10}}>
+            <div style={{fontSize:12,fontWeight:700,color:GD,marginBottom:8}}>Tgl Pembayaran: {(p.created_at||'').slice(0,16).replace('T',' ')}</div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{display:'flex',gap:20}}>
+                <div><div style={{fontSize:11,color:MT}}>No.</div><div style={{fontWeight:700,fontSize:13}}>{i+1}.</div></div>
+                <div><div style={{fontSize:11,color:MT}}>Dibayar</div><div style={{fontWeight:700,fontSize:13}}>{fmt(p.amount||0)}</div></div>
+                <div><div style={{fontSize:11,color:MT}}>Sisa</div><div style={{fontWeight:700,fontSize:13,color:sisaSetelah>0?RD:GD}}>{fmt(sisaSetelah)}</div></div>
+              </div>
+              <button onClick={()=>onHapusPembayaran(p)} style={{background:'none',border:'none',color:RD,cursor:'pointer',fontSize:16}}>🗑️</button>
+            </div>
+            <div style={{fontSize:11,color:MT,marginTop:6}}>Ref: {p.ref_no||'-'} · Oleh: {p.paid_by||'-'}</div>
+          </div>
+        );
+      })}
+
+      {!lunas&&(showPayForm ? (
+        <div style={{background:'#fff',borderRadius:14,padding:16,boxShadow:'0 2px 10px rgba(0,0,0,0.08)',marginTop:10}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Jumlah Pembayaran</div>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'11px 14px',border:`1.5px solid ${G}`,borderRadius:12,marginBottom:12}}>
+            <span style={{fontWeight:800,fontSize:18,color:MT}}>Rp</span>
+            <input value={payAmount?parseInt(String(payAmount).replace(/\D/g,''))||0:''} placeholder="0" inputMode="numeric"
+              onChange={e=>setPayAmount(e.target.value.replace(/\D/g,''))}
+              style={{flex:1,border:'none',outline:'none',fontSize:20,fontWeight:800}}/>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>setShowPayForm(false)} disabled={paying}
+              style={{flex:1,padding:12,background:'#eee',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Batal</button>
+            <button onClick={onBayar} disabled={paying}
+              style={{flex:2,padding:12,background:paying?MT:G,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer'}}>
+              {paying?'⏳ Menyimpan...':'💾 Simpan Pembayaran'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={()=>setShowPayForm(true)}
+          style={{width:'100%',padding:15,background:G,color:'#fff',border:'none',borderRadius:28,fontWeight:800,fontSize:15,cursor:'pointer',marginTop:16}}>
+          PEMBAYARAN
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function HutangPiutang() {
   const [tab, setTab]             = useState('piutang');
   const [transactions, setTrans]  = useState([]);
@@ -3267,6 +3547,17 @@ function HutangPiutang() {
   const [filterStatus, setFilterStatus] = useState('belum'); // belum | lunas | semua
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedInvoice, setSelectedInvoice]   = useState(null);
+  // Navigasi Hutang Supplier bertingkat: list supplier -> detail supplier -> detail transaksi
+  const [selSupplierHutang, setSelSupplierHutang] = useState(null); // nama supplier
+  const [selHutangTx, setSelHutangTx]             = useState(null); // item transaksi hutang
+  const [hutangSearch, setHutangSearch]           = useState('');
+  const [hutangFilterBelum, setHutangFilterBelum] = useState(true);
+  const [hutangFilterLunas, setHutangFilterLunas] = useState(false);
+  const [txPayments, setTxPayments]               = useState([]);
+  const [payAmount, setPayAmount]                 = useState('');
+  const [payingHutang, setPayingHutang]           = useState(false);
+  const me = getSession();
+  const myName = me?.nama||me?.username||'Admin';
   const [txItems, setTxItems]     = useState([]);
   const [showForm, setShowForm]   = useState(false);
   const [form, setForm]           = useState({party_name:'',amount:'',description:'',due_date:''});
@@ -3339,6 +3630,128 @@ function HutangPiutang() {
   // Hutang manual
   const hutangList  = debts.filter(d=>d.type==='hutang');
   const totalHutang = hutangList.filter(d=>d.status!=='Lunas').reduce((s,d)=>s+(d.amount-(d.paid||0)),0);
+
+  // ── Hutang Supplier: unifikasi PO-hutang + hutang manual, dikelompokkan per supplier ──
+  const hutangSupplierMap = {};
+  const ensureSup = name => {
+    if(!hutangSupplierMap[name]) hutangSupplierMap[name] = {name, items:[], totalSisa:0};
+    return hutangSupplierMap[name];
+  };
+  poHutang.forEach(po=>{
+    const name = po.supplier||'Tanpa Nama';
+    const sisa = (po.total||0)-(po.paid||0);
+    const isLunas = po.bayar==='Lunas'||sisa<=0;
+    const s = ensureSup(name);
+    s.items.push({source:'po', id:po.id, key:'po-'+po.id, supplier:name, total:po.total||0, paid:po.paid||0, sisa:Math.max(0,sisa), due_date:po.due_date, created_at:po.created_at, status:isLunas?'Lunas':'Belum Lunas', raw:po});
+    if(!isLunas) s.totalSisa += Math.max(0,sisa);
+  });
+  hutangList.forEach(d=>{
+    const name = d.party_name||'Tanpa Nama';
+    const sisa = (d.amount||0)-(d.paid||0);
+    const isLunas = d.status==='Lunas'||sisa<=0;
+    const s = ensureSup(name);
+    s.items.push({source:'manual', id:d.id, key:'debt-'+d.id, supplier:name, total:d.amount||0, paid:d.paid||0, sisa:Math.max(0,sisa), due_date:d.due_date, created_at:d.created_at, status:isLunas?'Lunas':'Belum Lunas', description:d.description, raw:d});
+    if(!isLunas) s.totalSisa += Math.max(0,sisa);
+  });
+  Object.values(hutangSupplierMap).forEach(s=>{
+    s.items.sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||''));
+    const unpaid = s.items.filter(i=>i.status==='Belum Lunas').sort((a,b)=>(a.due_date||'9999-99-99').localeCompare(b.due_date||'9999-99-99'));
+    s.nearest = unpaid[0]||null;
+  });
+  const hutangSupplierList = Object.values(hutangSupplierMap)
+    .filter(s=>{
+      if(hutangSearch && !s.name.toLowerCase().includes(hutangSearch.toLowerCase())) return false;
+      const hasBelum = s.items.some(i=>i.status==='Belum Lunas');
+      const hasLunas = s.items.some(i=>i.status==='Lunas');
+      if(hutangFilterBelum&&hutangFilterLunas) return hasBelum||hasLunas;
+      if(hutangFilterBelum) return hasBelum;
+      if(hutangFilterLunas) return hasLunas;
+      return true;
+    })
+    .sort((a,b)=>b.totalSisa-a.totalSisa);
+  const totalHutangSemua  = Object.values(hutangSupplierMap).reduce((s,x)=>s+x.totalSisa,0);
+  const totalTxHutangSemua= Object.values(hutangSupplierMap).reduce((s,x)=>s+x.items.length,0);
+  const supplierDetail = selSupplierHutang ? hutangSupplierMap[selSupplierHutang] : null;
+
+  // Catat pembayaran hutang (PO atau manual) — tersinkron ke buku kas & status otomatis
+  const catatBayarHutang = async(item, jumlah) => {
+    const refNo = genRefNo();
+    if(item.source==='po') {
+      await sbInsert('po_payments',[{po_id:item.id, amount:jumlah, paid_by:myName, ref_no:refNo}]);
+      const newPaid = (item.paid||0)+jumlah;
+      await sbUpdate('purchase_orders', item.id, {paid:newPaid, bayar: newPaid>=item.total?'Lunas':'Hutang'});
+    } else {
+      await sbInsert('debt_payments',[{debt_id:item.id, amount:jumlah, paid_by:myName, ref_no:refNo}]);
+      const newPaid = (item.paid||0)+jumlah;
+      await sbUpdate('debts', item.id, {paid:newPaid, status: newPaid>=item.total?'Lunas':'Belum'});
+    }
+    await catatPembayaran({type:'keluar', amount:jumlah, note:`Bayar hutang ${item.supplier} (${item.source==='po'?'PO-'+item.id:'manual'})`});
+  };
+
+  const lunasiSekaligusSupplier = async(sup) => {
+    const unpaid = sup.items.filter(i=>i.status==='Belum Lunas'&&i.sisa>0);
+    if(!unpaid.length) return alert('Tidak ada hutang yang belum lunas.');
+    if(!confirm(`Lunasi SEMUA hutang ${sup.name}?\nTotal: ${fmt(sup.totalSisa)} (${unpaid.length} transaksi)`)) return;
+    try {
+      for(const item of unpaid) await catatBayarHutang(item, item.sisa);
+      notifyDataChanged('hutang');
+      load();
+      setSelSupplierHutang(null);
+      alert(`✅ Semua hutang ${sup.name} berhasil dilunasi!`);
+    } catch(e){ alert('Gagal: '+e.message); }
+  };
+
+  const loadTxPayments = async(item) => {
+    setTxPayments([]);
+    try {
+      const rows = item.source==='po'
+        ? await sbGetAll('po_payments',{eq:{po_id:item.id},order:'created_at'})
+        : await sbGetAll('debt_payments',{eq:{debt_id:item.id},order:'created_at'});
+      setTxPayments(rows||[]);
+    } catch(e){ setTxPayments([]); }
+  };
+
+  const openHutangTx = (item) => { setSelHutangTx(item); loadTxPayments(item); };
+
+  const hapusPembayaranHutang = async(item, payment) => {
+    if(!confirm(`Hapus pembayaran ${fmt(payment.amount)} ini?\nSisa hutang akan bertambah kembali.`)) return;
+    try {
+      const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+      if(item.source==='po') {
+        await sbc.from('po_payments').delete().eq('id', payment.id);
+        const newPaid = Math.max(0,(item.paid||0)-payment.amount);
+        await sbUpdate('purchase_orders', item.id, {paid:newPaid, bayar: newPaid>=item.total?'Lunas':'Hutang'});
+      } else {
+        await sbc.from('debt_payments').delete().eq('id', payment.id);
+        const newPaid = Math.max(0,(item.paid||0)-payment.amount);
+        await sbUpdate('debts', item.id, {paid:newPaid, status: newPaid>=item.total?'Lunas':'Belum'});
+      }
+      load();
+      const updated = {...item, paid:Math.max(0,(item.paid||0)-payment.amount), sisa:item.sisa+payment.amount};
+      setSelHutangTx(updated);
+      loadTxPayments(item);
+      alert('✅ Pembayaran dihapus, sisa hutang disesuaikan.');
+    } catch(e){ alert('Gagal: '+e.message); }
+  };
+
+  const bayarHutangTx = async() => {
+    const jumlah = parseInt(String(payAmount).replace(/\D/g,''))||0;
+    if(jumlah<=0) return alert('Masukkan jumlah pembayaran!');
+    if(jumlah>selHutangTx.sisa) return alert(`Jumlah melebihi sisa hutang: ${fmt(selHutangTx.sisa)}`);
+    setPayingHutang(true);
+    try {
+      await catatBayarHutang(selHutangTx, jumlah);
+      notifyDataChanged('hutang');
+      const newPaid = (selHutangTx.paid||0)+jumlah;
+      const updated = {...selHutangTx, paid:newPaid, sisa:selHutangTx.total-newPaid, status:newPaid>=selHutangTx.total?'Lunas':'Belum Lunas'};
+      setSelHutangTx(updated);
+      setPayAmount('');
+      load();
+      loadTxPayments(selHutangTx);
+      alert(`✅ Pembayaran ${fmt(jumlah)} berhasil dicatat!${updated.status==='Lunas'?' Hutang LUNAS!':''}`);
+    } catch(e){ alert('Gagal: '+e.message); }
+    setPayingHutang(false);
+  };
 
   // Open invoice detail
   const openInvoice = async(tx) => {
@@ -3701,113 +4114,126 @@ function HutangPiutang() {
 
       {/* ── TAB HUTANG SUPPLIER ── */}
       {tab==='hutang'&&(
-        <>
-          {/* Summary */}
-          <div style={{background:'linear-gradient(135deg,#F3E5F5,#E1BEE7)',borderRadius:14,padding:'14px 18px',marginBottom:14,border:'1px solid #CE93D830',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div>
-              <div style={{fontSize:12,color:MT}}>Total Hutang ke Supplier</div>
-              <div style={{fontWeight:800,fontSize:20,color:'#8E44AD'}}>{fmt(
-                totalHutang +
-                poHutang.filter(p=>p.status!=='Lunas').reduce((s,p)=>s+(p.total||0),0)
-              )}</div>
+        selHutangTx ? (
+          /* ═══ LEVEL 3: DETAIL TRANSAKSI HUTANG ═══ */
+          <HutangTxDetail
+            item={selHutangTx}
+            payments={txPayments}
+            payAmount={payAmount} setPayAmount={setPayAmount}
+            paying={payingHutang}
+            onBack={()=>{setSelHutangTx(null);setTxPayments([]);setPayAmount('');}}
+            onBayar={bayarHutangTx}
+            onHapusPembayaran={(p)=>hapusPembayaranHutang(selHutangTx,p)}
+          />
+        ) : supplierDetail ? (
+          /* ═══ LEVEL 2: DETAIL SUPPLIER (daftar transaksi) ═══ */
+          <HutangSupplierDetail
+            supplier={supplierDetail}
+            onBack={()=>setSelSupplierHutang(null)}
+            onOpenTx={openHutangTx}
+            onLunasiSekaligus={()=>lunasiSekaligusSupplier(supplierDetail)}
+            onBuatHutang={()=>{ setForm(f=>({...f,party_name:supplierDetail.name})); setShowForm(true); }}
+          />
+        ) : (
+          /* ═══ LEVEL 1: DAFTAR SUPPLIER ═══ */
+          <>
+            <div style={{display:'flex',gap:8,marginBottom:12}}>
+              <input value={hutangSearch} onChange={e=>setHutangSearch(e.target.value)} placeholder="🔍 Cari nama supplier..."
+                style={{flex:1,padding:'10px 14px',border:'1.5px solid #eee',borderRadius:10,fontSize:13,boxSizing:'border-box'}}/>
             </div>
-            <div style={{fontSize:32}}>🏭</div>
-          </div>
 
-          {/* PO Hutang dari Pembelian */}
-          {poHutang.length>0&&(
-            <div style={{background:'#fff',borderRadius:12,marginBottom:14,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',overflow:'hidden'}}>
-              <div style={{padding:'10px 16px',background:'#F3E5F5',fontWeight:700,fontSize:13,color:'#8E44AD',borderBottom:'1px solid #E1BEE7'}}>
-                📦 Hutang dari Purchase Order ({poHutang.length})
+            <div style={{background:'linear-gradient(135deg,#F3E5F5,#E1BEE7)',borderRadius:14,padding:'14px 18px',marginBottom:14,border:'1px solid #CE93D830',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:12,color:MT}}>Total Hutang</div>
+                <div style={{fontWeight:800,fontSize:20,color:'#8E44AD'}}>{fmt(totalHutangSemua)}</div>
               </div>
-              {poHutang.map((po,i)=>(
-                <POHutangItem key={po.id} po={po} today={today} load={load}/>
-              ))}
-            </div>
-          )}
-
-          <button onClick={()=>setShowForm(true)}
-            style={{width:'100%',marginBottom:14,padding:'12px 0',background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:14}}>
-            + Catat Hutang Manual
-          </button>
-
-          {showForm&&(
-            <div style={{background:'#fff',borderRadius:12,padding:16,marginBottom:14,boxShadow:'0 2px 8px rgba(0,0,0,0.1)'}}>
-              <h4 style={{margin:'0 0 12px',fontSize:14}}>📝 Catat Hutang</h4>
-              {[['party_name','Nama Supplier *','text'],['description','Keterangan','text'],['amount','Jumlah (Rp) *','number'],['due_date','Jatuh Tempo','date']].map(([k,label,type])=>(
-                <div key={k} style={{marginBottom:8}}>
-                  <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
-                  <input value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))}
-                    type={type} placeholder={label}
-                    style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
-                </div>
-              ))}
-              <div style={{display:'flex',gap:8,marginTop:10}}>
-                <button onClick={()=>{setShowForm(false);setForm({party_name:'',amount:'',description:'',due_date:''}); }} style={{flex:1,padding:10,background:'#eee',border:'none',borderRadius:8,cursor:'pointer'}}>Batal</button>
-                <button onClick={async()=>{
-                  if(!form.party_name||!form.amount) return alert('Nama & jumlah wajib!');
-                  setSaving(true);
-                  try {
-                    await sbInsert('debts',[{...form,type:'hutang',amount:parseInt(form.amount),paid:0,status:'Belum'}]);
-                    setShowForm(false); setForm({party_name:'',amount:'',description:'',due_date:''});
-                    load();
-                  } catch(e){ alert('Gagal: '+e.message); }
-                  setSaving(false);
-                }} disabled={saving} style={{flex:2,padding:10,background:saving?MT:G,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer'}}>
-                  {saving?'⏳':'💾 Simpan'}
-                </button>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:12,color:MT}}>Total Transaksi</div>
+                <div style={{fontWeight:800,fontSize:20}}>{totalTxHutangSemua}</div>
               </div>
             </div>
-          )}
 
-          {loading ? <Loading/> : (
-            <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              {hutangList.length===0
-                ? <div style={{textAlign:'center',padding:'32px 0',color:MT,background:'#fff',borderRadius:12}}><div style={{fontSize:36}}>✅</div><div>Tidak ada hutang</div></div>
-                : hutangList.map((d,i)=>{
-                  const sisa   = d.amount-(d.paid||0);
-                  const lunas  = d.status==='Lunas'||sisa<=0;
-                  const overdue= !lunas&&d.due_date&&d.due_date<today;
+            <div style={{display:'flex',gap:16,marginBottom:14,alignItems:'center'}}>
+              <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:13,fontWeight:600}}>
+                <input type="checkbox" checked={hutangFilterBelum} onChange={e=>setHutangFilterBelum(e.target.checked)}
+                  style={{width:18,height:18,accentColor:G}}/> Belum Lunas
+              </label>
+              <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:13,fontWeight:600}}>
+                <input type="checkbox" checked={hutangFilterLunas} onChange={e=>setHutangFilterLunas(e.target.checked)}
+                  style={{width:18,height:18,accentColor:G}}/> Lunas
+              </label>
+            </div>
+
+            {loading ? <Loading/> : hutangSupplierList.length===0 ? (
+              <div style={{textAlign:'center',padding:'32px 0',color:MT,background:'#fff',borderRadius:12}}>
+                <div style={{fontSize:36}}>✅</div><div>Tidak ada hutang supplier</div>
+              </div>
+            ) : (
+              <div style={{background:'#fff',borderRadius:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+                {hutangSupplierList.map((s,i)=>{
+                  const belumCount = s.items.filter(x=>x.status==='Belum Lunas').length;
+                  const lunas = belumCount===0;
                   return (
-                    <div key={d.id} style={{background:'#fff',borderRadius:12,padding:'13px 16px',boxShadow:'0 1px 6px rgba(0,0,0,0.07)',borderLeft:`4px solid ${lunas?G:overdue?RD:'#8E44AD'}`}}>
-                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:lunas?0:8}}>
-                        <div>
-                          <div style={{fontWeight:700,fontSize:14}}>{d.party_name}</div>
-                          {d.description&&<div style={{fontSize:11,color:MT}}>{d.description}</div>}
-                          {d.due_date&&<div style={{fontSize:11,fontWeight:600,color:overdue?RD:OR}}>{overdue?'🚨':'📅'} {d.due_date}</div>}
-                        </div>
-                        <div style={{textAlign:'right'}}>
-                          <div style={{fontWeight:800,fontSize:15,color:lunas?G:'#8E44AD'}}>{lunas?'LUNAS':fmt(sisa)}</div>
-                          {!lunas&&<div style={{fontSize:10,color:MT}}>dari {fmt(d.amount)}</div>}
-                        </div>
+                    <div key={s.name} onClick={()=>setSelSupplierHutang(s.name)}
+                      style={{padding:'14px 16px',borderBottom:i<hutangSupplierList.length-1?'1px solid #f0f0f0':'none',cursor:'pointer',display:'flex',gap:10}}>
+                      <div style={{fontWeight:700,color:MT,minWidth:18}}>{i+1}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:800,fontSize:14,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name}</div>
+                        <div style={{fontSize:11,color:MT,marginTop:2}}>{s.nearest?.due_date?`JT: ${s.nearest.due_date}`:''}</div>
+                        {s.nearest&&<div style={{fontSize:12,fontWeight:700,color:'#8E44AD',marginTop:2}}>{fmt(s.nearest.sisa)}</div>}
                       </div>
-                      {!lunas&&(
-                        <div style={{display:'flex',gap:6}}>
-                          <button onClick={async()=>{
-                            const jumlah = prompt(`Bayar hutang ${d.party_name}?\nSisa: ${fmt(sisa)}`);
-                            if(!jumlah) return;
-                            const newPaid = (d.paid||0)+parseInt(jumlah);
-                            await sbUpdate('debts',d.id,{paid:newPaid,status:newPaid>=d.amount?'Lunas':'Belum'});
-                            load();
-                          }} style={{flex:1,padding:'7px 0',background:'#F3E5F5',border:'1px solid #8E44AD',borderRadius:8,cursor:'pointer',color:'#8E44AD',fontWeight:700,fontSize:12}}>
-                            💳 Bayar
-                          </button>
-                          <button onClick={async()=>{
-                            if(!confirm('Tandai lunas?')) return;
-                            await sbUpdate('debts',d.id,{paid:d.amount,status:'Lunas'});
-                            load();
-                          }} style={{flex:1,padding:'7px 0',background:GL,border:`1px solid ${G}`,borderRadius:8,cursor:'pointer',color:GD,fontWeight:700,fontSize:12}}>
-                            ✅ Lunas
-                          </button>
+                      <div style={{textAlign:'right',flexShrink:0}}>
+                        <div style={{display:'flex',alignItems:'center',gap:5,justifyContent:'flex-end'}}>
+                          <span style={{width:8,height:8,borderRadius:'50%',background:lunas?G:RD,display:'inline-block'}}/>
+                          <span style={{fontSize:12,fontWeight:700,color:lunas?GD:RD}}>{lunas?'Lunas':'Belum Lunas'}</span>
                         </div>
-                      )}
+                        <div style={{fontWeight:800,fontSize:14,color:lunas?GD:RD,marginTop:4}}>{fmt(s.totalSisa)}</div>
+                      </div>
                     </div>
                   );
-                })
-              }
+                })}
+              </div>
+            )}
+
+            <button onClick={()=>{setForm(f=>({...f,party_name:''})); setShowForm(true);}}
+              style={{width:'100%',marginTop:16,padding:'13px 0',background:G,color:'#fff',border:'none',borderRadius:28,fontWeight:800,fontSize:14,cursor:'pointer'}}>
+              Tambah Hutang
+            </button>
+          </>
+        )
+      )}
+
+      {/* Form Catat/Tambah Hutang Manual — dipakai dari level 1 & level 2 */}
+      {showForm&&tab==='hutang'&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget){setShowForm(false);setForm({party_name:'',amount:'',description:'',due_date:''});}}}>
+          <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:400,boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+            <h4 style={{margin:'0 0 12px',fontSize:15,fontWeight:800}}>📝 Catat Hutang ke Supplier</h4>
+            {[['party_name','Nama Supplier *','text'],['description','Keterangan','text'],['amount','Jumlah (Rp) *','number'],['due_date','Jatuh Tempo','date']].map(([k,label,type])=>(
+              <div key={k} style={{marginBottom:8}}>
+                <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
+                <input value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))}
+                  type={type} placeholder={label}
+                  style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:8,marginTop:10}}>
+              <button onClick={()=>{setShowForm(false);setForm({party_name:'',amount:'',description:'',due_date:''}); }} style={{flex:1,padding:10,background:'#eee',border:'none',borderRadius:8,cursor:'pointer'}}>Batal</button>
+              <button onClick={async()=>{
+                if(!form.party_name||!form.amount) return alert('Nama & jumlah wajib!');
+                setSaving(true);
+                try {
+                  await sbInsert('debts',[{...form,type:'hutang',amount:parseInt(form.amount),paid:0,status:'Belum'}]);
+                  setShowForm(false); setForm({party_name:'',amount:'',description:'',due_date:''});
+                  load();
+                } catch(e){ alert('Gagal: '+e.message); }
+                setSaving(false);
+              }} disabled={saving} style={{flex:2,padding:10,background:saving?MT:G,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer'}}>
+                {saving?'⏳':'💾 Simpan'}
+              </button>
             </div>
-          )}
-        </>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -7353,6 +7779,7 @@ function ScanNota({onBack, onDataReady}) {
         bayar:       extractedData.status_bayar,
         total:       totalCalc,
         due_date:    extractedData.due_date||null,
+        created_at:  extractedData.tanggal ? extractedData.tanggal+'T09:00:00' : undefined,
         notes:       [
           extractedData.no_nota?`No. Nota: ${extractedData.no_nota}`:'',
           extractedData.catatan||'',
@@ -8071,10 +8498,21 @@ function smartScore(query, name) {
 }
 
 // ── Helper: catat arus kas ke tabel payments (basis tanggal uang berpindah) ─
+// ── Helper: shift kasir aktif di perangkat ini (localStorage) ───────────────
+function getActiveShift() {
+  try { return JSON.parse(localStorage.getItem('mykasir_active_shift')||'null'); }
+  catch(e){ return null; }
+}
+function setActiveShift(shift) {
+  if(shift) localStorage.setItem('mykasir_active_shift', JSON.stringify(shift));
+  else localStorage.removeItem('mykasir_active_shift');
+}
+
 async function catatPembayaran({transaction_id=null, type='masuk', amount=0, method=null, note=''}) {
   if(!amount||amount<=0) return;
   try {
-    await sbInsert('payments',[{transaction_id, type, amount, method, note}]);
+    const shift = getActiveShift();
+    await sbInsert('payments',[{transaction_id, type, amount, method, note, shift_id: shift?.id||null}]);
   } catch(e){
     console.warn('Tabel payments belum ada — jalankan SQL migrasi agar arus kas akurat. ('+e.message+')');
   }
@@ -8750,7 +9188,7 @@ function Pembelian() {
   const [saving,     setSaving]     = useState(false);
 
   // Checkout form
-  const [form, setForm] = useState({supplier_id:'', bayar:'Lunas', due:'', notes:''});
+  const [form, setForm] = useState({supplier_id:'', bayar:'Lunas', due:'', notes:'', tanggal:new Date().toISOString().slice(0,10)});
   const [editPO, setEditPO] = useState(false);
   const [showReturPO, setShowReturPO] = useState(false);
   const [editItems, setEditItems] = useState([]);
@@ -8894,6 +9332,7 @@ function Pembelian() {
         total: totalCart,
         due_date: form.due||null,
         notes: form.notes||'',
+        created_at: form.tanggal ? form.tanggal+'T09:00:00' : undefined,
       }]);
       await sbInsert('po_items', cart.map(i=>({
         po_id: po.id,
@@ -9270,78 +9709,7 @@ function Pembelian() {
       </div>
 
       {/* Print Invoice PO */}
-      <button onClick={()=>{
-        const tokoNama = window.TOKO_NAMA||'SURYA LISTRIK';
-        const tokoAlamat = window.TOKO_ALAMAT||'';
-        const tokoTelp = window.TOKO_TELP||'';
-        const items = selected.items||[];
-        const total = selected.total||0;
-        const w = window.open('','_blank','width=800,height=600');
-        w.document.write(`<!DOCTYPE html><html><head><title>Invoice PO-${selected.id}</title>
-        <style>
-          body{font-family:Arial,sans-serif;padding:30px;color:#222;max-width:700px;margin:0 auto}
-          h1{color:#1a472a;font-size:22px;margin:0}
-          .header{display:flex;justify-content:space-between;border-bottom:3px solid #1a472a;padding-bottom:16px;margin-bottom:20px}
-          .badge{background:#E8F5E9;color:#1a472a;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700}
-          table{width:100%;border-collapse:collapse;margin:16px 0}
-          th{background:#1a472a;color:#fff;padding:10px 12px;text-align:left;font-size:13px}
-          td{padding:9px 12px;border-bottom:1px solid #eee;font-size:13px}
-          tr:nth-child(even){background:#f9f9f9}
-          .total-row{font-weight:800;font-size:15px;border-top:2px solid #1a472a}
-          .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;background:#F5F6FA;padding:14px;border-radius:8px}
-          .info-item label{font-size:11px;color:#777;display:block;margin-bottom:2px}
-          .info-item span{font-weight:600;font-size:13px}
-          .footer{text-align:center;margin-top:30px;padding-top:16px;border-top:1px dashed #ccc;color:#777;font-size:12px}
-          @media print{body{padding:10px}button{display:none}}
-        </style></head><body>
-        <div class="header">
-          <div>
-            <h1>${tokoNama}</h1>
-            <div style="font-size:12px;color:#777;margin-top:4px">${tokoAlamat}</div>
-            <div style="font-size:12px;color:#777">Telp: ${tokoTelp}</div>
-          </div>
-          <div style="text-align:right">
-            <div style="font-size:18px;font-weight:800;color:#1a472a">INVOICE PEMBELIAN</div>
-            <div style="font-size:13px;color:#777;margin-top:4px">No: PO-${selected.id}</div>
-            <div class="badge">${selected.status}</div>
-          </div>
-        </div>
-        <div class="info-grid">
-          <div class="info-item"><label>Supplier</label><span>${selected.supplier}</span></div>
-          <div class="info-item"><label>Status Bayar</label><span>${selected.bayar}</span></div>
-          <div class="info-item"><label>Tanggal PO</label><span>${selected.created_at?.slice(0,10)||'-'}</span></div>
-          <div class="info-item"><label>Jatuh Tempo</label><span>${selected.due_date||'Tidak ada'}</span></div>
-        </div>
-        <table>
-          <thead><tr><th>#</th><th>Nama Produk</th><th style="text-align:center">Qty</th><th style="text-align:right">Harga</th><th style="text-align:right">Subtotal</th></tr></thead>
-          <tbody>
-            ${items.map((item,i)=>`
-              <tr>
-                <td>${i+1}</td>
-                <td>${item.name}</td>
-                <td style="text-align:center">${item.qty} ${item.satuan||'pcs'}</td>
-                <td style="text-align:right">Rp ${(item.price||0).toLocaleString('id-ID')}</td>
-                <td style="text-align:right">Rp ${((item.qty||0)*(item.price||0)).toLocaleString('id-ID')}</td>
-              </tr>
-            `).join('')}
-            <tr class="total-row">
-              <td colspan="4" style="text-align:right">TOTAL</td>
-              <td style="text-align:right;color:#1a472a">Rp ${total.toLocaleString('id-ID')}</td>
-            </tr>
-          </tbody>
-        </table>
-        ${selected.notes?`<div style="background:#FFF3E0;padding:10px 14px;border-radius:8px;font-size:12px;margin-top:12px">📝 ${selected.notes}</div>`:''}
-        <div class="footer">
-          <div>${tokoNama} · ${tokoAlamat} · ${tokoTelp}</div>
-          <div style="margin-top:4px">Dicetak: ${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</div>
-        </div>
-        <div style="text-align:center;margin-top:20px">
-          <button onclick="window.print()" style="padding:10px 30px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Invoice</button>
-        </div>
-        </body></html>`);
-        w.document.close();
-        w.focus();
-      }}
+      <button onClick={()=>printInvoicePO(selected)}
         style={{width:'100%',padding:12,background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:10,fontWeight:700,fontSize:14,cursor:'pointer',color:'#1976D2',marginBottom:10}}>
         🖨️ Print Invoice Pembelian
       </button>
@@ -9386,13 +9754,16 @@ function Pembelian() {
               );
             }
             const sb = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+            // Bersihkan dulu data anak yang masih menahan PO ini (mencegah gagal hapus setengah jalan)
+            await sb.from('stock_batches').delete().eq('po_id', selected.id).catch(()=>{});
+            await sb.from('po_payments').delete().eq('po_id', selected.id).catch(()=>{});
             await sb.from('po_items').delete().eq('po_id', selected.id);
             await sb.from('purchase_orders').delete().eq('id', selected.id);
             notifyDataChanged('pembelian');
             loadOrders();
             setView('list');
             alert(`✅ PO berhasil dihapus!${perluBalikStok?'\nStok sudah disesuaikan kembali.':''}`);
-          } catch(e){ alert('Gagal hapus: '+e.message); }
+          } catch(e){ alert('Gagal hapus: '+e.message+'\n\nPO mungkin tersisa sebagian (misal 0 item tapi masih tercatat). Coba hapus lagi — proses sudah diperbaiki untuk membersihkan data terkait terlebih dulu.'); }
         }}
           style={{flex:1,padding:12,background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:10,fontWeight:700,cursor:'pointer',color:RD,fontSize:13}}>
           🗑️ Hapus PO
@@ -9468,6 +9839,11 @@ function Pembelian() {
           </select>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+          <div>
+            <label style={{fontSize:12,color:MT,fontWeight:600,display:'block',marginBottom:4}}>📅 Tanggal Pembelian</label>
+            <input type="date" value={form.tanggal} onChange={e=>setForm(f=>({...f,tanggal:e.target.value}))}
+              style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
           <div>
             <label style={{fontSize:12,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Jatuh Tempo</label>
             <input type="date" value={form.due} onChange={e=>setForm(f=>({...f,due:e.target.value}))}
@@ -9681,6 +10057,12 @@ function Pembelian() {
                 </button>
               ))}
             </div>
+            {/* Tanggal pembelian */}
+            <div style={{marginBottom:10}}>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>📅 Tanggal Pembelian</label>
+              <input type="date" value={form.tanggal||new Date().toISOString().slice(0,10)} onChange={e=>setForm(f=>({...f,tanggal:e.target.value}))}
+                style={{width:'100%',padding:'8px 10px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+            </div>
             {/* Jatuh tempo */}
             <div style={{marginBottom:10}}>
               <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Jatuh Tempo</label>
@@ -9806,15 +10188,347 @@ function Absensi() {
   </div>;
 }
 
-function Shift() {
-  return <div style={{padding:16,maxWidth:900,margin:"0 auto"}}>
-    <div style={{background:`linear-gradient(120deg,${G},${GD})`,borderRadius:12,padding:20,color:"#fff",marginBottom:16}}>
-      <div style={{fontSize:13,opacity:0.85}}>Shift Aktif</div>
-      <div style={{fontSize:20,fontWeight:800,marginTop:4}}>Shift Pagi — 07:00</div>
-      <div style={{fontSize:13,opacity:0.85,marginTop:4}}>Kasir: Ahmad Rizki</div>
-      <button style={{marginTop:12,padding:"8px 20px",background:"#fff",border:"none",borderRadius:8,color:GD,fontWeight:700,cursor:"pointer"}}>Tutup Shift</button>
+// ── SHIFT KASIR & CASH DRAWER (opsional, multi-device) ──────────────────────
+function ShiftStartForm({currentUser, onStarted}) {
+  const [drawers, setDrawers]     = useState([]);
+  const [openShifts, setOpenShifts] = useState([]); // shift status 'open' semua drawer
+  const [selDrawer, setSelDrawer] = useState('');
+  const [saldoAwal, setSaldoAwal] = useState('');
+  const [loading, setLoading]     = useState(true);
+  const [saving, setSaving]       = useState(false);
+  const [showAddDrawer, setShowAddDrawer] = useState(false);
+  const [newDrawerName, setNewDrawerName] = useState('');
+
+  const load = async() => {
+    setLoading(true);
+    try {
+      const [dw, sh] = await Promise.all([
+        sbGetAll('cashdrawers',{order:'name'}),
+        sbGetAll('shifts',{eq:{status:'open'},order:'opening_at',asc:false}),
+      ]);
+      setDrawers(dw||[]);
+      setOpenShifts(sh||[]);
+      if(!selDrawer && dw?.length) setSelDrawer(String(dw[0].id));
+    } catch(e){}
+    setLoading(false);
+  };
+  useEffect(()=>{ load(); },[]);
+
+  const addDrawer = async() => {
+    if(!newDrawerName.trim()) return alert('Isi nama cashdrawer!');
+    try {
+      const r = await sbInsert('cashdrawers',[{name:newDrawerName.trim()}]);
+      setNewDrawerName(''); setShowAddDrawer(false);
+      await load();
+      if(r?.[0]?.id) setSelDrawer(String(r[0].id));
+    } catch(e){ alert('Gagal: '+e.message); }
+  };
+
+  const drawer = drawers.find(d=>String(d.id)===String(selDrawer));
+  const usedBy = openShifts.find(s=>String(s.cashdrawer_id)===String(selDrawer));
+
+  const isiDataTerakhir = async() => {
+    try {
+      const last = await sbGet('shifts',{eq:{cashdrawer_id:parseInt(selDrawer),status:'closed'},order:'closing_at',asc:false});
+      if(last?.[0]) setSaldoAwal(String(last[0].closing_balance||0));
+      else alert('Belum ada riwayat shift untuk cashdrawer ini.');
+    } catch(e){}
+  };
+
+  const mulai = async() => {
+    if(!selDrawer) return alert('Pilih atau tambah cashdrawer dulu!');
+    if(usedBy) return alert(`Cashdrawer ini sedang dipakai oleh ${usedBy.user_name} (${usedBy.user_email}).\\nMinta dia tutup shift dulu, atau pilih cashdrawer lain.`);
+    const saldo = parseInt(String(saldoAwal).replace(/\\D/g,''))||0;
+    setSaving(true);
+    try {
+      const r = await sbInsert('shifts',[{
+        cashdrawer_id: parseInt(selDrawer),
+        cashdrawer_name: drawer?.name||'',
+        user_email: currentUser.email, user_name: currentUser.nama||currentUser.username,
+        opening_balance: saldo, status:'open',
+      }]);
+      const shift = r?.[0];
+      setActiveShift({id:shift.id, cashdrawer_id:parseInt(selDrawer), cashdrawer_name:drawer?.name||'', opening_balance:saldo, opening_at:shift.opening_at});
+      onStarted();
+    } catch(e){ alert('Gagal mulai shift: '+e.message+(e.message.includes('shifts')?'\\n\\nKemungkinan tabel shifts/cashdrawers belum dibuat. Jalankan SQL migrasi.':'')); }
+    setSaving(false);
+  };
+
+  if(loading) return <Loading/>;
+
+  return (
+    <div style={{maxWidth:500,margin:'0 auto'}}>
+      <div style={{background:'#F5F6FA',borderRadius:10,padding:'10px 14px',marginBottom:14,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div style={{fontSize:12,color:MT}}>Tambah / Edit Cashdrawer</div>
+        <button onClick={()=>setShowAddDrawer(v=>!v)}
+          style={{width:30,height:30,borderRadius:'50%',background:G,color:'#fff',border:'none',fontSize:18,cursor:'pointer'}}>+</button>
+      </div>
+      {showAddDrawer&&(
+        <div style={{display:'flex',gap:8,marginBottom:14}}>
+          <input value={newDrawerName} onChange={e=>setNewDrawerName(e.target.value)} placeholder="Nama cashdrawer, mis. Kasir Depan"
+            style={{flex:1,padding:'9px 12px',border:'1.5px solid #ddd',borderRadius:8,fontSize:13}}/>
+          <button onClick={addDrawer} style={{padding:'9px 16px',background:G,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer'}}>Simpan</button>
+        </div>
+      )}
+      <div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:16}}>
+        Fitur Cashdrawer dapat mengelola siapa yang pegang kasir & cocokkan saldo kas fisik saat tutup shift.
+      </div>
+
+      <div style={{background:`linear-gradient(120deg,#FFF3D6,${GL})`,borderRadius:12,padding:14,marginBottom:16,display:'flex',alignItems:'center',gap:12}}>
+        <div style={{width:44,height:44,borderRadius:'50%',background:OR,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:16}}>
+          {(currentUser.nama||currentUser.username||'?').slice(0,2).toUpperCase()}
+        </div>
+        <div>
+          <div style={{fontWeight:800,fontSize:15}}>{currentUser.nama||currentUser.username}</div>
+          <div style={{fontSize:12,color:MT}}>{currentUser.role==='admin'?'Admin/Owner':'Kasir'}</div>
+        </div>
+      </div>
+
+      {drawers.length===0 ? (
+        <div style={{textAlign:'center',color:MT,fontSize:13,padding:20}}>Belum ada cashdrawer. Tambah dulu lewat tombol + di atas.</div>
+      ) : (
+        <>
+          <div style={{fontSize:12,color:MT,fontWeight:600,marginBottom:6}}>Pilih Cashdrawer</div>
+          <div style={{display:'flex',gap:8,marginBottom:14}}>
+            <select value={selDrawer} onChange={e=>setSelDrawer(e.target.value)}
+              style={{flex:1,padding:'11px 12px',border:`1.5px solid ${usedBy?RD:'#ddd'}`,borderRadius:10,fontSize:14,fontWeight:700,background:'#fff'}}>
+              {drawers.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <button onClick={load} style={{padding:'0 16px',background:'#F5F6FA',border:'none',borderRadius:10,fontWeight:600,fontSize:13,cursor:'pointer',color:TX}}>🔄 Refresh</button>
+          </div>
+
+          {usedBy&&(
+            <div style={{background:'#FFF0F0',borderRadius:10,padding:'12px 14px',marginBottom:14}}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Sedang digunakan oleh:</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,fontSize:13}}>
+                <div><div style={{color:MT,fontSize:11}}>Nama</div><div style={{fontWeight:600}}>{usedBy.user_name}</div></div>
+                <div><div style={{color:MT,fontSize:11}}>Email</div><div style={{fontWeight:600,wordBreak:'break-all'}}>{usedBy.user_email}</div></div>
+              </div>
+            </div>
+          )}
+
+          <div style={{fontSize:12,color:MT,fontWeight:600,marginBottom:6}}>Masukkan Saldo Awal</div>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'11px 14px',border:'1.5px solid #ddd',borderRadius:12,marginBottom:8}}>
+            <span style={{fontWeight:800,fontSize:18,color:MT}}>Rp</span>
+            <input value={saldoAwal?parseInt(String(saldoAwal).replace(/\\D/g,''))||0:''} placeholder="0" inputMode="numeric"
+              onChange={e=>setSaldoAwal(e.target.value.replace(/\\D/g,''))}
+              style={{flex:1,border:'none',outline:'none',fontSize:20,fontWeight:800}}/>
+          </div>
+          <button onClick={isiDataTerakhir} style={{background:'none',border:'none',color:G,fontWeight:700,fontSize:13,cursor:'pointer',padding:0,marginBottom:20}}>
+            Masukkan Data Terakhir
+          </button>
+
+          <button onClick={mulai} disabled={saving||!!usedBy}
+            style={{width:'100%',padding:15,background:saving||usedBy?MT:G,color:'#fff',border:'none',borderRadius:28,fontWeight:800,fontSize:15,cursor:'pointer'}}>
+            {saving?'⏳ Memulai...':'Mulai Shift Cashdrawer'}
+          </button>
+        </>
+      )}
     </div>
-  </div>;
+  );
+}
+
+function ShiftActiveCard({shift, currentUser, onClosed}) {
+  const [now, setNow]           = useState(Date.now());
+  const [showClose, setShowClose] = useState(false);
+  const [live, setLive]         = useState({masuk:0, keluar:0, tunai:0});
+  const [fisik, setFisik]       = useState('');
+  const [catatan, setCatatan]   = useState('');
+  const [saving, setSaving]     = useState(false);
+
+  useEffect(()=>{ const t=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(t); },[]);
+
+  const loadLive = async() => {
+    try {
+      const pays = await sbGetAll('payments',{eq:{shift_id:shift.id},order:'created_at'});
+      const masuk  = (pays||[]).filter(p=>p.type==='masuk').reduce((s,p)=>s+(p.amount||0),0);
+      const keluar = (pays||[]).filter(p=>p.type==='keluar').reduce((s,p)=>s+(p.amount||0),0);
+      const tunai  = (pays||[]).filter(p=>p.type==='masuk'&&(p.method==='Tunai'||p.method==='Manual')).reduce((s,p)=>s+(p.amount||0),0);
+      setLive({masuk,keluar,tunai});
+    } catch(e){}
+  };
+  useEffect(()=>{ loadLive(); const t=setInterval(loadLive,8000); return ()=>clearInterval(t); },[shift.id]);
+
+  const elapsed = (()=>{
+    const ms = now - new Date(shift.opening_at).getTime();
+    const h = Math.floor(ms/3600000), m = Math.floor((ms%3600000)/60000);
+    return `${h}j ${m}m`;
+  })();
+
+  const expected = (shift.opening_balance||0) + live.tunai - live.keluar;
+  const fisikNum = parseInt(String(fisik).replace(/\D/g,''))||0;
+  const selisih  = fisikNum - expected;
+
+  const tutupShift = async() => {
+    if(!fisik) return alert('Isi jumlah uang fisik yang dihitung di laci!');
+    if(!confirm(`Tutup shift cashdrawer "${shift.cashdrawer_name}"?\n\nSaldo seharusnya: ${fmt(expected)}\nUang fisik: ${fmt(fisikNum)}\nSelisih: ${selisih===0?'Rp 0 (pas!)':fmt(selisih)}`)) return;
+    setSaving(true);
+    try {
+      await sbUpdate('shifts', shift.id, {
+        status:'closed', closing_at:new Date().toISOString(),
+        closing_balance:fisikNum, expected_balance:expected, selisih, notes:catatan||null,
+      });
+      setActiveShift(null);
+      onClosed();
+    } catch(e){ alert('Gagal tutup shift: '+e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{maxWidth:500,margin:'0 auto'}}>
+      <div style={{background:`linear-gradient(120deg,${G},${GD})`,borderRadius:14,padding:20,color:'#fff',marginBottom:16}}>
+        <div style={{fontSize:12,opacity:0.85}}>Shift Aktif · {shift.cashdrawer_name}</div>
+        <div style={{fontSize:22,fontWeight:800,marginTop:4}}>⏱ {elapsed}</div>
+        <div style={{fontSize:13,opacity:0.9,marginTop:6}}>Kasir: {shift.user_name}</div>
+        <div style={{fontSize:11,opacity:0.75,marginTop:2}}>Mulai: {new Date(shift.opening_at).toLocaleString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
+        <div style={{background:'#fff',borderRadius:12,padding:14,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:11,color:MT}}>Saldo Awal</div>
+          <div style={{fontWeight:800,fontSize:16,marginTop:2}}>{fmt(shift.opening_balance||0)}</div>
+        </div>
+        <div style={{background:'#fff',borderRadius:12,padding:14,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:11,color:MT}}>Saldo Seharusnya</div>
+          <div style={{fontWeight:800,fontSize:16,marginTop:2,color:GD}}>{fmt(expected)}</div>
+        </div>
+        <div style={{background:'#fff',borderRadius:12,padding:14,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:11,color:MT}}>Kas Masuk (tunai)</div>
+          <div style={{fontWeight:800,fontSize:16,marginTop:2,color:G}}>+{fmt(live.tunai)}</div>
+        </div>
+        <div style={{background:'#fff',borderRadius:12,padding:14,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:11,color:MT}}>Kas Keluar</div>
+          <div style={{fontWeight:800,fontSize:16,marginTop:2,color:RD}}>-{fmt(live.keluar)}</div>
+        </div>
+      </div>
+
+      {!showClose ? (
+        <button onClick={()=>setShowClose(true)}
+          style={{width:'100%',padding:15,background:RD,color:'#fff',border:'none',borderRadius:28,fontWeight:800,fontSize:15,cursor:'pointer'}}>
+          🔒 Tutup Shift
+        </button>
+      ) : (
+        <div style={{background:'#fff',borderRadius:14,padding:16,boxShadow:'0 2px 10px rgba(0,0,0,0.08)'}}>
+          <div style={{fontWeight:800,fontSize:14,marginBottom:12}}>Hitung Uang Fisik di Laci</div>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'11px 14px',border:`1.5px solid ${G}`,borderRadius:12,marginBottom:10}}>
+            <span style={{fontWeight:800,fontSize:18,color:MT}}>Rp</span>
+            <input value={fisik?parseInt(String(fisik).replace(/\D/g,''))||0:''} placeholder="0" inputMode="numeric"
+              onChange={e=>setFisik(e.target.value.replace(/\D/g,''))}
+              style={{flex:1,border:'none',outline:'none',fontSize:20,fontWeight:800}}/>
+          </div>
+          {fisik&&(
+            <div style={{background:selisih===0?GL:selisih>0?'#FFF8E1':'#FFF0F0',borderRadius:10,padding:'10px 14px',marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:3}}><span>Saldo seharusnya</span><b>{fmt(expected)}</b></div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:3}}><span>Uang fisik</span><b>{fmt(fisikNum)}</b></div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:14,paddingTop:6,borderTop:'1px solid rgba(0,0,0,0.08)'}}>
+                <span style={{fontWeight:700}}>Selisih</span>
+                <span style={{fontWeight:900,color:selisih===0?GD:selisih>0?'#F57C00':RD}}>
+                  {selisih===0?'✅ Pas!':selisih>0?`+${fmt(selisih)} (lebih)`:`${fmt(selisih)} (kurang)`}
+                </span>
+              </div>
+            </div>
+          )}
+          <input value={catatan} onChange={e=>setCatatan(e.target.value)} placeholder="Catatan (opsional)"
+            style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:12}}/>
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>setShowClose(false)} disabled={saving}
+              style={{flex:1,padding:12,background:'#eee',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Batal</button>
+            <button onClick={tutupShift} disabled={saving}
+              style={{flex:2,padding:12,background:saving?MT:RD,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer'}}>
+              {saving?'⏳ Menyimpan...':'🔒 Konfirmasi Tutup Shift'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RiwayatShift() {
+  const [shifts, setShifts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+
+  useEffect(()=>{
+    sbGetAll('shifts',{eq:{status:'closed'},order:'closing_at',asc:false}).then(d=>{setShifts(d||[]);setLoading(false);}).catch(()=>setLoading(false));
+  },[]);
+
+  if(loading) return <Loading/>;
+  if(!shifts.length) return <div style={{textAlign:'center',color:MT,padding:30,fontSize:13}}>Belum ada riwayat shift.</div>;
+
+  return (
+    <div style={{maxWidth:600,margin:'0 auto'}}>
+      {shifts.map(s=>(
+        <div key={s.id} onClick={()=>setSelected(selected?.id===s.id?null:s)}
+          style={{background:'#fff',borderRadius:12,padding:14,marginBottom:8,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',cursor:'pointer',border:selected?.id===s.id?`1.5px solid ${G}`:'1.5px solid transparent'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:13}}>{s.cashdrawer_name} · {s.user_name}</div>
+              <div style={{fontSize:11,color:MT,marginTop:2}}>
+                {new Date(s.opening_at).toLocaleDateString('id-ID',{day:'numeric',month:'short'})} · {new Date(s.opening_at).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})} - {new Date(s.closing_at).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}
+              </div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontWeight:800,fontSize:13,color:s.selisih===0?GD:s.selisih>0?'#F57C00':RD}}>
+                {s.selisih===0?'✅ Pas':fmt(s.selisih)}
+              </div>
+              <div style={{fontSize:10,color:MT}}>selisih</div>
+            </div>
+          </div>
+          {selected?.id===s.id&&(
+            <div style={{marginTop:10,paddingTop:10,borderTop:'1px dashed #ddd',fontSize:12,display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+              <div><span style={{color:MT}}>Saldo awal:</span> {fmt(s.opening_balance||0)}</div>
+              <div><span style={{color:MT}}>Saldo seharusnya:</span> {fmt(s.expected_balance||0)}</div>
+              <div><span style={{color:MT}}>Uang fisik:</span> {fmt(s.closing_balance||0)}</div>
+              <div><span style={{color:MT}}>Email:</span> {s.user_email}</div>
+              {s.notes&&<div style={{gridColumn:'span 2'}}><span style={{color:MT}}>Catatan:</span> {s.notes}</div>}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Shift() {
+  const [tab, setTab] = useState('current');
+  const [currentUser, setCurrentUser] = useState(()=>getSession());
+  const [activeShift, setActiveShiftState] = useState(()=>getActiveShift());
+  const [checking, setChecking] = useState(true);
+
+  // Verifikasi shift lokal masih 'open' di database (bisa saja sudah ditutup dari device lain)
+  useEffect(()=>{
+    (async()=>{
+      const local = getActiveShift();
+      if(local?.id) {
+        try {
+          const r = await sbGet('shifts',{eq:{id:local.id}});
+          if(!r?.[0]||r[0].status!=='open') { setActiveShift(null); setActiveShiftState(null); }
+        } catch(e){}
+      }
+      setChecking(false);
+    })();
+  },[]);
+
+  if(checking) return <Loading/>;
+
+  return (
+    <div style={{padding:16,maxWidth:900,margin:'0 auto'}}>
+      <div style={{display:'flex',gap:20,marginBottom:16,borderBottom:'2px solid #eee'}}>
+        {[['current','Saat Ini'],['riwayat','Riwayat']].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)}
+            style={{background:'none',border:'none',padding:'10px 4px',fontWeight:700,fontSize:15,color:tab===k?TX:MT,borderBottom:tab===k?`2px solid ${G}`:'2px solid transparent',marginBottom:-2,cursor:'pointer'}}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {tab==='current' ? (
+        activeShift
+          ? <ShiftActiveCard shift={activeShift} currentUser={currentUser} onClosed={()=>setActiveShiftState(null)}/>
+          : <ShiftStartForm currentUser={currentUser} onStarted={()=>setActiveShiftState(getActiveShift())}/>
+      ) : <RiwayatShift/>}
+    </div>
+  );
 }
 
 
