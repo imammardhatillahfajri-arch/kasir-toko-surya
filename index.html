@@ -57,20 +57,51 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-LOGOQTYSHARE";
+const APP_VERSION = "v14.07.2026-AUDITFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
+// ── Ketahanan jaringan: timeout + retry otomatis untuk sinyal lemot/putus ───
+function withTimeout(promise, ms=15000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject)=>setTimeout(()=>reject(new Error('Koneksi lambat — waktu tunggu habis. Periksa sinyal internet.')), ms)),
+  ]);
+}
+function isNetworkError(e) {
+  const msg = String(e?.message||'').toLowerCase();
+  return msg.includes('failed to fetch') || msg.includes('load failed') || msg.includes('network')
+      || msg.includes('waktu tunggu habis') || msg.includes('err_internet') || msg.includes('err_connection');
+}
+// Retry HANYA untuk error jaringan (bukan error dari server, misal validasi/RLS) —
+// aman dipakai untuk operasi baca (GET) dan update (idempoten). TIDAK dipakai untuk
+// insert (checkout dll) karena berisiko dobel-catat kalau request sebenarnya sukses
+// tapi respons gagal balik.
+async function withRetry(fn, {retries=2, delayMs=900, timeoutMs=15000}={}) {
+  let lastErr;
+  for(let i=0;i<=retries;i++){
+    try { return await withTimeout(fn(), timeoutMs); }
+    catch(e){
+      lastErr = e;
+      if(!isNetworkError(e) || i===retries) throw e;
+      await new Promise(r=>setTimeout(r, delayMs*(i+1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function sbGet(table, opts = {}) {
-  let q = sb.from(table).select(opts.select || "*");
-  if (opts.order) q = q.order(opts.order, { ascending: opts.asc ?? true });
-  if (opts.limit) q = q.limit(opts.limit);
-  if (opts.eq) Object.entries(opts.eq).forEach(([k, v]) => { q = q.eq(k, v); });
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
-  return data;
+  return withRetry(async()=>{
+    let q = sb.from(table).select(opts.select || "*");
+    if (opts.order) q = q.order(opts.order, { ascending: opts.asc ?? true });
+    if (opts.limit) q = q.limit(opts.limit);
+    if (opts.eq) Object.entries(opts.eq).forEach(([k, v]) => { q = q.eq(k, v); });
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return data;
+  });
 }
 
 // Load semua data dengan pagination (untuk tabel besar seperti products)
@@ -79,12 +110,15 @@ async function sbGetAll(table, opts = {}) {
   let allData = [];
   let page = 0;
   while(true) {
-    let q = sb.from(table).select(opts.select || "*");
-    if (opts.order) q = q.order(opts.order, { ascending: opts.asc ?? true });
-    if (opts.eq) Object.entries(opts.eq).forEach(([k, v]) => { q = q.eq(k, v); });
-    q = q.range(page * pageSize, (page + 1) * pageSize - 1);
-    const { data, error } = await q;
-    if (error) throw new Error(error.message);
+    const data = await withRetry(async()=>{
+      let q = sb.from(table).select(opts.select || "*");
+      if (opts.order) q = q.order(opts.order, { ascending: opts.asc ?? true });
+      if (opts.eq) Object.entries(opts.eq).forEach(([k, v]) => { q = q.eq(k, v); });
+      q = q.range(page * pageSize, (page + 1) * pageSize - 1);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return data;
+    });
     if (!data || data.length === 0) break;
     allData = [...allData, ...data];
     if (data.length < pageSize) break;
@@ -93,18 +127,26 @@ async function sbGetAll(table, opts = {}) {
   return allData;
 }
 async function sbInsert(table, data) {
-  const { data: d, error } = await sb.from(table).insert(data).select();
+  // TIDAK di-retry otomatis — hindari risiko tersimpan dobel kalau koneksi
+  // putus persis setelah data masuk ke server. Timeout tetap dipasang biar
+  // tombol tidak macet lama; kalau gagal, ulangi manual (aman, belum tersimpan).
+  const { data: d, error } = await withTimeout(sb.from(table).insert(data).select());
   if (error) throw new Error(error.message);
   return d;
 }
 async function sbUpdate(table, id, data) {
-  const { error } = await sb.from(table).update(data).eq("id", id);
-  if (error) throw new Error(error.message);
+  return withRetry(async()=>{
+    const { error } = await sb.from(table).update(data).eq("id", id);
+    if (error) throw new Error(error.message);
+  });
 }
 async function sbDelete(table, id) {
-  const { error } = await sb.from(table).delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  return withRetry(async()=>{
+    const { error } = await sb.from(table).delete().eq("id", id);
+    if (error) throw new Error(error.message);
+  });
 }
+
 
 // ── Colors ─────────────────────────────────────────────────────────────────
 const G = "#2ECC71", GD = "#27AE60", GL = "#E8F8F0";
@@ -5543,7 +5585,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
   // Buka detail invoice dari daftar retur (fetch kalau di luar hasil filter)
   const openReturInvoice = async(txId) => {
     if(!txId) return;
-    let tx = trans.find(t=>t.id===txId);
+    let tx = transactions.find(t=>t.id===txId);
     if(!tx){
       try {
         const r = await sbGet('transactions',{eq:{id:txId}});
@@ -5697,9 +5739,9 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
       setEditForm(f=>({...f, status, paid}));
       setTxItems(editItems.map(i=>({
         ...i,
-        qty:   parseInt(i.qty),
+        qty:   parseQty(i.qty),
         price: parseInt(i.price),
-        subtotal: parseInt(i.qty)*parseInt(i.price),
+        subtotal: Math.round(parseQty(i.qty)*(parseInt(i.price)||0)),
       })));
       setEditMode(false);
       setPayModal(null);
@@ -6127,7 +6169,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
                                     <tbody>
                                       ${newItms.map(i=>{
                                         const isNew=!oldItms.find(o=>o.product_id===i.product_id);
-                                        return `<tr class="${isNew?'added':''}"><td>${i.product_name}${isNew?' ✨':''}</td><td>${i.qty} ${i.satuan||''}</td><td style="text-align:right">Rp ${((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')}</td></tr>`;
+                                        return `<tr class="${isNew?'added':''}"><td>${i.product_name}${isNew?' ✨':''}</td><td>${i.qty} ${i.satuan||''}</td><td style="text-align:right">Rp ${Math.round(parseQty(i.qty)*(parseInt(i.price)||0)).toLocaleString('id-ID')}</td></tr>`;
                                       }).join('')}
                                       ${oldItms.filter(o=>!newItms.find(n=>n.product_id===o.product_id)).map(i=>`<tr class="removed"><td>${i.product_name||i.name} ❌</td><td>${i.qty} ${i.satuan||''}</td><td style="text-align:right">Rp ${((i.qty||0)*(i.price||0)).toLocaleString('id-ID')}</td></tr>`).join('')}
                                       <tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;text-align:right;border-top:2px solid #1a472a;color:#1a472a">Rp ${newTot.toLocaleString('id-ID')}</td></tr>
@@ -11739,6 +11781,42 @@ const PAGE_TITLES = {
   absensi:'Absensi', shift:'Shift',
 };
 
+// ── Indikator status koneksi — muncul di seluruh app saat sinyal bermasalah ─
+function useNetworkStatus() {
+  const [online, setOnline] = useState(navigator.onLine);
+  const [slow, setSlow]     = useState(false);
+  useEffect(()=>{
+    const goOnline  = ()=>{ setOnline(true); setSlow(false); };
+    const goOffline = ()=>setOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    // Cek berkala: request kecil ke Supabase, kalau lama/gagal tandai "lambat"
+    const ping = async()=>{
+      if(!navigator.onLine){ setOnline(false); return; }
+      const start = Date.now();
+      try {
+        await withTimeout(sb.from('app_settings').select('key').limit(1), 6000);
+        setOnline(true);
+        setSlow(Date.now()-start > 3000);
+      } catch(e){ setSlow(true); }
+    };
+    const interval = setInterval(ping, 20000);
+    return ()=>{ window.removeEventListener('online',goOnline); window.removeEventListener('offline',goOffline); clearInterval(interval); };
+  },[]);
+  return {online, slow};
+}
+
+function NetworkStatusBanner() {
+  const {online, slow} = useNetworkStatus();
+  if(online && !slow) return null;
+  return (
+    <div style={{position:'fixed',top:0,left:0,right:0,zIndex:9999,textAlign:'center',padding:'6px 12px',fontSize:12,fontWeight:700,color:'#fff',
+      background: online ? OR : RD}}>
+      {online ? '🟡 Koneksi lambat — beberapa aksi mungkin butuh waktu lebih lama' : '🔴 Tidak ada koneksi internet — transaksi & data baru tidak akan tersimpan'}
+    </div>
+  );
+}
+
 function App() {
   const [page, setPage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -11796,7 +11874,7 @@ function App() {
   };
 
   // Tampilkan login page kalau belum login
-  if(!currentUser) return <LoginPage onLogin={handleLogin}/>;
+  if(!currentUser) return <><NetworkStatusBanner/><LoginPage onLogin={handleLogin}/></>;
 
   const isAdmin = currentUser?.role === 'admin';
 
@@ -11831,6 +11909,7 @@ function App() {
   };
 
   return <div style={{minHeight:"100vh",background:GR,fontFamily:"'Segoe UI',system-ui,sans-serif"}}>
+    <NetworkStatusBanner/>
     <Sidebar active={page} onNavigate={setPage} open={sidebarOpen} onClose={()=>setSidebarOpen(false)}/>
     <div>
       <TopBar title={PAGE_TITLES[page]} onMenuToggle={()=>setSidebarOpen(o=>!o)}/>
