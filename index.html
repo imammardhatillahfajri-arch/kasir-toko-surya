@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-POFIX";
+const APP_VERSION = "v14.07.2026-PESANAN";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -1263,6 +1263,59 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
   const [paid2,        setPaid2]        = useState('');   // pembayaran kedua
   const [metode2,      setMetode2]      = useState('QRIS'); // metode kedua
 
+  // ── Simpan Pesanan (hold transaksi) — keranjang bisa disimpan & dibuka lagi nanti ──
+  const [showPesanan,   setShowPesanan]   = useState(false);
+  const [pesananList,   setPesananList]   = useState([]);
+  const [pesananLoading,setPesananLoading]= useState(false);
+  const [savingPesanan, setSavingPesanan] = useState(false);
+
+  const loadPesanan = async() => {
+    setPesananLoading(true);
+    try { setPesananList(await sbGetAll('held_orders',{order:'created_at',asc:false})); }
+    catch(e){ setPesananList([]); }
+    setPesananLoading(false);
+  };
+
+  const simpanPesanan = async() => {
+    if(cart.length===0) return alert('Keranjang masih kosong!');
+    setSavingPesanan(true);
+    try {
+      await sbInsert('held_orders',[{
+        label: customer||('Pesanan '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})),
+        customer, items: cart, diskon, pajak,
+        dilayani_oleh: dilayaniOleh, keterangan: keteranganStruk, metode_bayar: metodeBayar,
+      }]);
+      setCart([]); setCustomer(''); setDiskon(0); setPajak(0); setDilayaniOleh(''); setKeteranganStruk('');
+      alert('✅ Pesanan disimpan! Keranjang dikosongkan, siap layani pelanggan berikutnya.');
+    } catch(e){
+      alert('Gagal simpan pesanan: '+e.message+(e.message.includes('held_orders')?'\n\nTabel held_orders belum ada. Jalankan SQL migrasi.':''));
+    }
+    setSavingPesanan(false);
+  };
+
+  const bukaPesanan = async(order) => {
+    if(cart.length>0 && !confirm('Keranjang saat ini belum kosong. Isinya akan diganti dengan pesanan ini. Lanjutkan?')) return;
+    try {
+      const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+      await sbc.from('held_orders').delete().eq('id', order.id);
+      setCart(order.items||[]);
+      setCustomer(order.customer||''); setDiskon(order.diskon||0); setPajak(order.pajak||0);
+      setDilayaniOleh(order.dilayani_oleh||''); setKeteranganStruk(order.keterangan||''); setMetodeBayar(order.metode_bayar||'Tunai');
+      setShowPesanan(false);
+    } catch(e){ alert('Gagal membuka pesanan: '+e.message); }
+  };
+
+  const hapusPesanan = async(order) => {
+    if(!confirm(`Hapus pesanan "${order.label}"? Barang di dalamnya tidak akan tersimpan lagi.`)) return;
+    try {
+      const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+      await sbc.from('held_orders').delete().eq('id', order.id);
+      loadPesanan();
+    } catch(e){ alert('Gagal: '+e.message); }
+  };
+
+  useEffect(()=>{ loadPesanan(); },[]);
+
   useEffect(()=>{
     (async()=>{
       try {
@@ -1450,11 +1503,57 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
         }}
       />
     )}
+    {showPesanan && (
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:1500,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+        onClick={e=>{if(e.target===e.currentTarget)setShowPesanan(false);}}>
+        <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:420,maxHeight:'80vh',overflowY:'auto',boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <div style={{fontWeight:800,fontSize:16}}>📋 Pesanan Tertunda</div>
+            <button onClick={()=>setShowPesanan(false)} style={{background:'#eee',border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontWeight:700}}>×</button>
+          </div>
+          {pesananLoading ? <Loading/> : pesananList.length===0 ? (
+            <div style={{textAlign:'center',color:MT,fontSize:13,padding:24}}>Belum ada pesanan tersimpan.</div>
+          ) : pesananList.map(o=>{
+            const totalO = (o.items||[]).reduce((s,i)=>s+(i.qty||0)*(i.price||0),0);
+            return (
+              <div key={o.id} style={{background:'#F5F6FA',borderRadius:12,padding:'12px 14px',marginBottom:8}}>
+                <div style={{fontWeight:700,fontSize:13}}>{o.label}</div>
+                <div style={{fontSize:11,color:MT,marginTop:2}}>
+                  {(o.items||[]).length} item · {fmt(totalO)} · {o.created_at?new Date(o.created_at).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}):''}
+                </div>
+                <div style={{display:'flex',gap:6,marginTop:8}}>
+                  <button onClick={()=>bukaPesanan(o)}
+                    style={{flex:1,padding:'7px 0',background:G,color:'#fff',border:'none',borderRadius:8,fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                    📂 Buka Pesanan
+                  </button>
+                  <button onClick={()=>hapusPesanan(o)}
+                    style={{padding:'7px 14px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,color:RD,fontWeight:700,fontSize:12,cursor:'pointer'}}>
+                    🗑️
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
     <div style={{display:'flex',flexDirection:'column',height:'100%',overflowY:'auto'}}>
       {/* Header */}
-      <div style={{padding:'12px 16px',borderBottom:'1px solid #eee',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
-        <div style={{fontWeight:700,fontSize:15,color:TX}}>🛒 Keranjang <span style={{background:G,color:'#fff',borderRadius:10,padding:'2px 8px',fontSize:12,marginLeft:4}}>{cart.reduce((s,i)=>s+i.qty,0)}</span></div>
-        <button onClick={clearCart} style={{background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12,color:RD,fontWeight:600}}>🗑️ Kosongkan</button>
+      <div style={{padding:'12px 16px',borderBottom:'1px solid #eee',flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+          <div style={{fontWeight:700,fontSize:15,color:TX}}>🛒 Keranjang <span style={{background:G,color:'#fff',borderRadius:10,padding:'2px 8px',fontSize:12,marginLeft:4}}>{cart.reduce((s,i)=>s+i.qty,0)}</span></div>
+          <button onClick={clearCart} style={{background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12,color:RD,fontWeight:600}}>🗑️ Kosongkan</button>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={()=>{loadPesanan();setShowPesanan(true);}}
+            style={{flex:1,padding:'7px 0',background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:8,color:'#1976D2',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+            📋 Pesanan{pesananList.length>0?` (${pesananList.length})`:''}
+          </button>
+          <button onClick={simpanPesanan} disabled={cart.length===0||savingPesanan}
+            style={{flex:1,padding:'7px 0',background:cart.length===0?'#f5f5f5':'#FFF3D6',border:`1px solid ${cart.length===0?'#ddd':OR}`,borderRadius:8,color:cart.length===0?MT:OR,fontWeight:700,fontSize:12,cursor:cart.length===0?'default':'pointer'}}>
+            {savingPesanan?'⏳':'💾'} Simpan Pesanan
+          </button>
+        </div>
       </div>
 
       {/* Item List */}
