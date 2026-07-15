@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-AUDITFIX";
+const APP_VERSION = "v14.07.2026-CRASHFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -8701,6 +8701,13 @@ function buildStrukEscPos({toko, alamat, telp, invoice, tgl, jam, customer, kasi
 
 // ── Helper: pencarian pintar (multi-kata AND, abaikan simbol, toleran typo) ─
 // "kawat petak 1x1" cocok dengan 'KAWAT PETAK 1"X1"90CM'; "kabel" tetap ketemu walau diketik "kabel"/"kable"
+// ── Helper: qty desimal — toleran koma (2,5) maupun titik (2.5) ────────────
+function parseQty(v) {
+  if(typeof v === 'number') return v;
+  const n = parseFloat(String(v??'').replace(',','.'));
+  return isNaN(n) ? 0 : n;
+}
+
 function lev1(a,b){ // beda maksimal 1 huruf (insert/delete/ganti)
   if(a===b) return true;
   const la=a.length, lb=b.length;
@@ -11817,6 +11824,31 @@ function NetworkStatusBanner() {
   );
 }
 
+// ── Pelindung: kalau satu halaman error, jangan sampai seluruh app ikut blank ─
+class ErrorBoundary extends React.Component {
+  constructor(props){ super(props); this.state = {hasError:false, error:null}; }
+  static getDerivedStateFromError(error){ return {hasError:true, error}; }
+  componentDidCatch(error, info){ console.error('[ErrorBoundary]', error, info); }
+  componentDidUpdate(prevProps){ if(prevProps.pageKey!==this.props.pageKey && this.state.hasError) this.setState({hasError:false,error:null}); }
+  render(){
+    if(this.state.hasError){
+      return (
+        <div style={{padding:'48px 24px',textAlign:'center',maxWidth:420,margin:'0 auto'}}>
+          <div style={{fontSize:44,marginBottom:14}}>⚠️</div>
+          <div style={{fontWeight:800,fontSize:16,marginBottom:8}}>Halaman ini mengalami error</div>
+          <div style={{fontSize:12,color:MT,marginBottom:18,wordBreak:'break-word'}}>{String(this.state.error?.message||this.state.error||'Error tidak diketahui')}</div>
+          <button onClick={()=>this.setState({hasError:false,error:null})}
+            style={{padding:'11px 24px',background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:14}}>
+            🔄 Coba Lagi
+          </button>
+          <div style={{fontSize:11,color:MT,marginTop:14}}>Halaman lain di app ini tetap aman digunakan.</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   const [page, setPage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -11913,7 +11945,7 @@ function App() {
     <Sidebar active={page} onNavigate={setPage} open={sidebarOpen} onClose={()=>setSidebarOpen(false)}/>
     <div>
       <TopBar title={PAGE_TITLES[page]} onMenuToggle={()=>setSidebarOpen(o=>!o)}/>
-      <main style={{minHeight:"calc(100vh - 60px)",paddingBottom:70}}>{renderPage()}</main>
+      <main style={{minHeight:"calc(100vh - 60px)",paddingBottom:70}}><ErrorBoundary pageKey={page}>{renderPage()}</ErrorBoundary></main>
     </div>
     <nav style={{position:"fixed",bottom:0,left:0,right:0,background:"#fff",borderTop:"1px solid #eee",display:"flex",justifyContent:"space-around",padding:"8px 0",boxShadow:"0 -2px 8px rgba(0,0,0,0.07)",zIndex:20}}>
       {[{id:"dashboard",icon:"🏠",label:"Home"},{id:"transaksi",icon:"🛒",label:"Jual"},{id:"keuangan",icon:"💰",label:"Kas"},{id:"laporan",icon:"📊",label:"Laporan"},{id:"pengaturan",icon:"⚙️",label:"Atur"}].map(item=>(
