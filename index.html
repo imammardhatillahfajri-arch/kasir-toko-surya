@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-CRASHFIX";
+const APP_VERSION = "v14.07.2026-KASFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -973,7 +973,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:400,display:'flex',flexDirection:'column',alignItems:'center'}} onClick={()=>setPreviewMode(null)}>
       <div style={{background:'#fff',borderRadius:'0 0 16px 16px',padding:'10px 20px',display:'flex',gap:10,alignItems:'center',width:'100%',maxWidth:900,flexShrink:0,boxShadow:'0 4px 20px rgba(0,0,0,0.3)'}} onClick={e=>e.stopPropagation()}>
         <div style={{flex:1,fontWeight:700,fontSize:14}}>
-          👁️ Preview {previewMode==='thermal'?'Thermal 58mm':'A4 Landscape'}
+          👁️ Preview {previewMode==='thermal'?'Thermal 58mm':'A5 Landscape'}
         </div>
         <button onClick={()=>handlePrint(previewMode)}
           style={{padding:'8px 18px',background:G,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>
@@ -1158,7 +1158,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
               <button onClick={()=>setPreviewMode('a4')}
                 style={{padding:'10px 6px',background:'#E8F5E9',border:`1.5px solid ${G}`,borderRadius:12,cursor:'pointer',textAlign:'center'}}>
                 <div style={{fontSize:18,marginBottom:3}}>👁️</div>
-                <div style={{fontWeight:700,fontSize:11,color:GD}}>Preview A4</div>
+                <div style={{fontWeight:700,fontSize:11,color:GD}}>Preview A5</div>
               </button>
               <button onClick={()=>handlePrint('thermal')}
                 style={{padding:'10px 6px',background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:12,cursor:'pointer',textAlign:'center'}}>
@@ -8763,11 +8763,18 @@ function setActiveShift(shift) {
 
 async function catatPembayaran({transaction_id=null, type='masuk', amount=0, method=null, note=''}) {
   if(!amount||amount<=0) return;
+  const shift = getActiveShift();
   try {
-    const shift = getActiveShift();
     await sbInsert('payments',[{transaction_id, type, amount, method, note, shift_id: shift?.id||null}]);
   } catch(e){
-    console.warn('Tabel payments belum ada — jalankan SQL migrasi agar arus kas akurat. ('+e.message+')');
+    // Kolom shift_id mungkin belum ada di database (migrasi belum dijalankan) —
+    // JANGAN sampai catatan kas hilang total karenanya. Coba lagi tanpa shift_id.
+    try {
+      await sbInsert('payments',[{transaction_id, type, amount, method, note}]);
+      console.warn('[catatPembayaran] Kolom shift_id belum ada di tabel payments — tercatat tanpa atribusi shift. Jalankan: alter table payments add column if not exists shift_id bigint references shifts(id);');
+    } catch(e2){
+      console.error('[catatPembayaran] GAGAL TOTAL mencatat kas — cek tabel payments!', e2.message);
+    }
   }
 }
 
