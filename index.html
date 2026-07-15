@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PELANGGANBARU";
+const APP_VERSION = "v14.07.2026-BTDIAG";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -8471,6 +8471,8 @@ const BT_COMMON_SERVICES = [
   '000018f0-0000-1000-8000-00805f9b34fb', // paling umum dipakai printer klon 58mm
   '0000ff00-0000-1000-8000-00805f9b34fb', // varian lain yang sering dipakai
   '49535343-fe7d-4ae5-8fa9-9fafd205e455', // varian modul serial BLE (mis. beberapa Xprinter)
+  '0000ffe0-0000-1000-8000-00805f9b34fb', // modul BLE-serial gaya HM-10, banyak dipakai printer generic tanpa merk
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART Service, dipakai sebagian printer clone berbasis nRF/ESP32
 ];
 window.BTPrinter = {
   device: null, char: null,
@@ -8485,16 +8487,19 @@ window.BTPrinter = {
     });
     const server = await device.gatt.connect();
     let foundChar = null;
+    let foundServiceCount = 0;
     // Coba service yang dikenal dulu
     for(const svcId of BT_COMMON_SERVICES) {
       try {
         const svc = await server.getPrimaryService(svcId);
+        foundServiceCount++;
         const chars = await svc.getCharacteristics();
+        console.log('[BTPrinter] service ditemukan:', svcId, 'karakteristik:', chars.map(c=>c.uuid+' (write='+!!c.properties.write+', writeNoResp='+!!c.properties.writeWithoutResponse+')'));
         foundChar = chars.find(c=>c.properties.write||c.properties.writeWithoutResponse) || foundChar;
         if(foundChar) break;
       } catch(e){ /* service ini tidak ada di printer ini, coba berikutnya */ }
     }
-    // Fallback: telusuri SEMUA service yang di-expose (butuh browser yang izinkan getPrimaryServices tanpa filter)
+    // Fallback: telusuri SEMUA service yang di-expose dari daftar yang diizinkan
     if(!foundChar) {
       try {
         const services = await server.getPrimaryServices();
@@ -8507,7 +8512,11 @@ window.BTPrinter = {
     }
     if(!foundChar) {
       device.gatt.disconnect();
-      throw new Error('Printer terhubung tapi tidak ditemukan jalur cetak yang cocok. Printer ini mungkin pakai protokol berbeda — coba cek nama/manual printer.');
+      throw new Error(
+        foundServiceCount===0
+          ? 'Printer ini tidak mengekspos jalur BLE yang dikenal (dicoba 5 protokol umum). Kemungkinan besar printer ini hanya mendukung Bluetooth Classic (SPP) — Chrome TIDAK BISA cetak langsung ke printer jenis ini sama sekali (batasan browser, bukan bug app). Gunakan tombol "Cetak Thermal" (dialog print biasa) setelah pairing printer di Pengaturan Bluetooth HP/laptop.\n\nUntuk pastikan: buka tab baru → ketik chrome://bluetooth-internals/#devices → cari printer ini → lihat daftar GATT Service UUID-nya. Kalau ada, kirim ke Claude biar bisa ditambahkan persis.'
+          : 'Printer terhubung dan ada service yang dikenal, tapi tidak ada jalur tulis (write) di dalamnya. Buka Console browser (F12) untuk detail characteristic yang terdeteksi, atau cek chrome://bluetooth-internals/#devices untuk UUID service lengkapnya, lalu laporkan ke Claude.'
+      );
     }
     this.device = device;
     this.char = foundChar;
