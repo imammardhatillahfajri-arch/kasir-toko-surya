@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PESANAN";
+const APP_VERSION = "v14.07.2026-PELANGGANBARU";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -1258,7 +1258,26 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
   const [diskon,       setDiskon]       = useState(0);   // % diskon global
   const [pajak,        setPajak]        = useState(0);   // % pajak
   const [dilayaniOleh, setDilayaniOleh] = useState('');  // nama kasir/pelayan
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCustName, setNewCustName]   = useState('');
+  const [newCustPhone, setNewCustPhone] = useState('');
+  const [savingCustomer, setSavingCustomer] = useState(false);
+
+  const simpanPelangganBaru = async() => {
+    if(!newCustName.trim()) return alert('Isi nama pelanggan!');
+    setSavingCustomer(true);
+    try {
+      const [c] = await sbInsert('customers',[{name:newCustName.trim(), phone:newCustPhone.trim()||null}]);
+      window._customers = [...(window._customers||[]), c].sort((a,b)=>a.name.localeCompare(b.name));
+      setCustomer(c.name);
+      setShowNewCustomer(false);
+      setNewCustName(''); setNewCustPhone('');
+    } catch(e){ alert('Gagal simpan pelanggan: '+e.message); }
+    setSavingCustomer(false);
+  };
+
   const [keteranganStruk, setKeteranganStruk] = useState('');
+
   const [pisahBayar,   setPisahBayar]   = useState(false);
   const [paid2,        setPaid2]        = useState('');   // pembayaran kedua
   const [metode2,      setMetode2]      = useState('QRIS'); // metode kedua
@@ -1503,6 +1522,28 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
         }}
       />
     )}
+    {showNewCustomer && (
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:1600,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+        onClick={e=>{if(e.target===e.currentTarget)setShowNewCustomer(false);}}>
+        <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:380,boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+          <div style={{fontWeight:800,fontSize:16,marginBottom:14}}>👤 Tambah Pelanggan Baru</div>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Nama Pelanggan *</label>
+          <input value={newCustName} onChange={e=>setNewCustName(e.target.value)} placeholder="Contoh: Pak Budi, PT. Maju Jaya..." autoFocus
+            style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:10}}/>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>No. HP (opsional)</label>
+          <input value={newCustPhone} onChange={e=>setNewCustPhone(e.target.value)} placeholder="08xxxxxxxxxx"
+            style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:16}}/>
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>setShowNewCustomer(false)} disabled={savingCustomer}
+              style={{flex:1,padding:11,background:'#eee',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer'}}>Batal</button>
+            <button onClick={simpanPelangganBaru} disabled={savingCustomer}
+              style={{flex:2,padding:11,background:savingCustomer?MT:G,color:'#fff',border:'none',borderRadius:8,fontWeight:800,cursor:'pointer'}}>
+              {savingCustomer?'⏳ Menyimpan...':'💾 Simpan & Pilih'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     {showPesanan && (
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:1500,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
         onClick={e=>{if(e.target===e.currentTarget)setShowPesanan(false);}}>
@@ -1596,13 +1637,19 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
           </label>
           {statusBayar==='Piutang' ? (
             <>
-              <select value={customer} onChange={e=>setCustomer(e.target.value)}
-                style={{width:'100%',padding:'9px 12px',border:`1.5px solid ${customer?G:'#eee'}`,borderRadius:8,fontSize:13,background:'#fff',outline:'none',boxSizing:'border-box'}}>
-                <option value="">-- Pilih Pelanggan Terdaftar --</option>
-                {(window._customers||[]).map(c=><option key={c.id} value={c.name}>{c.name}{c.phone?` · ${c.phone}`:''}</option>)}
-              </select>
+              <div style={{display:'flex',gap:6}}>
+                <select value={customer} onChange={e=>setCustomer(e.target.value)}
+                  style={{flex:1,padding:'9px 12px',border:`1.5px solid ${customer?G:'#eee'}`,borderRadius:8,fontSize:13,background:'#fff',outline:'none',boxSizing:'border-box',minWidth:0}}>
+                  <option value="">-- Pilih Pelanggan Terdaftar --</option>
+                  {(window._customers||[]).map(c=><option key={c.id} value={c.name}>{c.name}{c.phone?` · ${c.phone}`:''}</option>)}
+                </select>
+                <button onClick={()=>{setNewCustName('');setNewCustPhone('');setShowNewCustomer(true);}}
+                  style={{flexShrink:0,padding:'0 14px',background:GL,border:`1.5px solid ${G}`,borderRadius:8,color:GD,fontWeight:700,fontSize:13,cursor:'pointer'}}>
+                  + Baru
+                </button>
+              </div>
               {!customer&&<div style={{fontSize:10,color:RD,marginTop:3}}>⚠️ Wajib pilih pelanggan terdaftar untuk piutang</div>}
-              {window._customers?.length===0&&<div style={{fontSize:10,color:OR,marginTop:3}}>⚠️ Belum ada pelanggan terdaftar. Tambah dulu di Manajemen → Pelanggan</div>}
+              {window._customers?.length===0&&<div style={{fontSize:10,color:OR,marginTop:3}}>⚠️ Belum ada pelanggan terdaftar — klik "+ Baru" untuk menambahkan</div>}
             </>
           ) : (
             <input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="Contoh: Pak Budi, PT. Maju Jaya..."
