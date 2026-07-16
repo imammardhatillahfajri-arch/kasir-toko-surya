@@ -57,13 +57,27 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-DATEFIX";
+const APP_VERSION = "v14.07.2026-SHAREIMG";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
 // ── Ketahanan jaringan: timeout + retry otomatis untuk sinyal lemot/putus ───
+// ── Helper: lazy-load script eksternal sekali saja (dipakai buat html2canvas) ─
+window._loadedScripts = window._loadedScripts || {};
+function loadScript(src) {
+  if(window._loadedScripts[src]) return window._loadedScripts[src];
+  window._loadedScripts[src] = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Gagal memuat '+src));
+    document.head.appendChild(s);
+  });
+  return window._loadedScripts[src];
+}
+
 function withTimeout(promise, ms=15000) {
   return Promise.race([
     promise,
@@ -1013,6 +1027,44 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   const shareNota = async() => {
     setSharing(true);
     try {
+      // Teks singkat sebagai caption/pesan pendamping gambar
+      const caption = `🧾 ${tokoNama}\nInvoice: ${invoice}\nTotal: ${fmt(total)}${status==='Piutang'?` · Sisa: ${fmt(Math.max(0,total-paidNum))}`:''}`;
+
+      // ── Coba buat gambar nota dari elemen struk thermal ──
+      let imageFile = null;
+      try {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+        const target = document.getElementById('struk-thermal');
+        const wrapper = document.getElementById('print-root');
+        if(target && wrapper && window.html2canvas) {
+          const prevLeft = wrapper.style.left, prevTop = wrapper.style.top;
+          wrapper.style.left = '0px'; wrapper.style.top = '0px'; wrapper.style.zIndex = '-1';
+          await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))); // biar layout settle
+          const canvas = await window.html2canvas(target, {scale:2, backgroundColor:'#ffffff', useCORS:true});
+          wrapper.style.left = prevLeft; wrapper.style.top = prevTop; wrapper.style.zIndex = '';
+          const blob = await new Promise(res=>canvas.toBlob(res,'image/png'));
+          if(blob) imageFile = new File([blob], `nota-${invoice}.png`, {type:'image/png'});
+        }
+      } catch(e){ console.warn('Gagal membuat gambar nota, pakai teks:', e.message); }
+
+      // ── Share sebagai gambar kalau didukung ──
+      if(imageFile && navigator.canShare && navigator.canShare({files:[imageFile]})) {
+        try { await navigator.share({files:[imageFile], title:`Nota ${invoice}`, text:caption}); setSharing(false); return; }
+        catch(e){ if(e.name==='AbortError'){ setSharing(false); return; } /* lanjut fallback */ }
+      }
+
+      // ── Fallback 1: gambar berhasil dibuat tapi share-file tidak didukung → unduh gambarnya ──
+      if(imageFile) {
+        const url = URL.createObjectURL(imageFile);
+        const a = document.createElement('a');
+        a.href = url; a.download = imageFile.name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url), 5000);
+        alert('📥 Gambar nota tersimpan ke perangkat!\n\nBrowser ini belum bisa langsung share gambar, jadi silakan buka WhatsApp lalu lampirkan gambar yang baru diunduh.');
+        setSharing(false); return;
+      }
+
+      // ── Fallback 2: gagal total bikin gambar → kembali ke share teks biasa ──
       const lines = [];
       lines.push(`🧾 *${tokoNama}*`);
       if(tokoAlamat) lines.push(tokoAlamat);
@@ -1129,7 +1181,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
           {/* Print buttons */}
           <button onClick={shareNota} disabled={sharing}
             style={{width:'100%',padding:'11px 0',background:sharing?'#eee':'#E8F5E9',border:`1.5px solid ${G}`,borderRadius:10,cursor:sharing?'default':'pointer',marginBottom:14,display:'flex',alignItems:'center',justifyContent:'center',gap:8,fontWeight:700,fontSize:13,color:GD}}>
-            {sharing?'⏳ Menyiapkan...':<>📤 Bagikan Nota (WhatsApp)</>}
+            {sharing?'⏳ Membuat gambar nota...':<>📤 Bagikan Nota (WhatsApp)</>}
           </button>
           <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>🖨️ Cetak Struk:</div>
           {isPiutang ? (
