@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-ASISTENAI";
+const APP_VERSION = "v14.07.2026-ROUNDFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -9306,7 +9306,7 @@ function applyTieredDiskon(raw, str) {
   const tiers = parseTieredDiskon(str);
   let sisa = raw;
   tiers.forEach(t => { sisa = sisa * (1 - t/100); });
-  return raw - sisa; // nominal diskon
+  return Math.round(raw - sisa); // nominal diskon — selalu dibulatkan, Rupiah tidak punya pecahan
 }
 function effectiveDiskonPct(str) {
   const tiers = parseTieredDiskon(str);
