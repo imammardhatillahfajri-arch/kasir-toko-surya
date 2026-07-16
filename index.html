@@ -17,6 +17,7 @@
 <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
+  @keyframes pulse { 0%{opacity:1} 50%{opacity:0.5} 100%{opacity:1} }
   @media(max-width:699px){
     .hide-on-mobile { display: none !important; }
     .laporan-mobile-back { display: block !important; }
@@ -57,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-HPPFIX";
+const APP_VERSION = "v14.07.2026-FAVORITVOICE";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -2209,6 +2210,9 @@ function Transaksi() {
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [search, setSearch] = useState('');
+  const [favoritProducts, setFavoritProducts] = useState([]);
+  const [showFavorit, setShowFavorit] = useState(true);
+  const [listening, setListening] = useState(false);
   const [activeCat, setActiveCat] = useState('Semua');
   const [loading, setLoading] = useState(true);
   const [bypassStok, setBypassStok] = useState(false); // mode bypass stok
@@ -2237,6 +2241,7 @@ function Transaksi() {
     sbGetAll('products',{order:'name'}).then(p=>{
       const sorted = (p||[]).sort((a,b)=>a.name.localeCompare(b.name));
       setProducts(sorted);
+      loadFavoritProducts(sorted);
     }).catch(()=>{});
   },[]);
 
@@ -2338,6 +2343,24 @@ function Transaksi() {
   const updatePrice = (cartKey,newPrice) => setCart(prev=>prev.map(i=>(i.cartKey||i.id)===cartKey?{...i,price:newPrice}:i));
   const clearCart = () => { setCart([]); };
   const getQty = (id) => cart.filter(i=>i.id===id).reduce((s,i)=>s+i.qty,0);
+
+  // ── Produk Favorit/Terlaris — dihitung dari riwayat penjualan terbaru ──
+  const loadFavoritProducts = async(prodList) => {
+    try {
+      const cached = window._favoritCache;
+      if(cached && Date.now()-cached.at < 30*60*1000) { setFavoritProducts(cached.list); return; }
+      const items = await sbGet('transaction_items',{order:'id',asc:false,limit:3000});
+      const freq = {};
+      (items||[]).forEach(it=>{
+        if(!it.product_id) return;
+        freq[it.product_id] = (freq[it.product_id]||0) + (parseQty(it.qty)||0);
+      });
+      const topIds = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([id])=>parseInt(id));
+      const list = topIds.map(id=>(prodList||products).find(p=>p.id===id)).filter(Boolean);
+      window._favoritCache = {list, at: Date.now()};
+      setFavoritProducts(list);
+    } catch(e){ setFavoritProducts([]); }
+  };
   const totalItems = cart.reduce((s,i)=>s+i.qty, 0);
   const totalHarga = cart.reduce((s,i)=>s+i.price*i.qty, 0);
 
@@ -2496,6 +2519,25 @@ function Transaksi() {
                 <rect x="22" y="13" width="1" height="10"/>
               </svg>
             </button>
+            {/* Voice Search */}
+            {(window.SpeechRecognition||window.webkitSpeechRecognition)&&(
+              <button onClick={()=>{
+                  const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
+                  const rec = new SR();
+                  rec.lang = 'id-ID';
+                  rec.interimResults = false;
+                  rec.maxAlternatives = 1;
+                  rec.onstart = ()=>setListening(true);
+                  rec.onend = ()=>setListening(false);
+                  rec.onerror = ()=>setListening(false);
+                  rec.onresult = (e)=>{ setSearch(e.results[0][0].transcript); };
+                  rec.start();
+                }}
+                title="Cari pakai suara"
+                style={{width:42,height:42,borderRadius:10,background:listening?RD:'#F5F6FA',border:`1.5px solid ${listening?RD:'#eee'}`,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:18,animation:listening?'pulse 1s infinite':'none'}}>
+                {listening?'🔴':'🎤'}
+              </button>
+            )}
             {/* Bypass Stok Toggle */}
             <button onClick={()=>{
               if(!bypassStok){if(!confirm('⚠️ Aktifkan bypass stok?\nStok tidak akan dicek. Gunakan jika stok belum terupdate!')) return;}
@@ -2547,6 +2589,34 @@ function Transaksi() {
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* Grid Favorit/Terlaris — tampil kalau belum ada filter aktif */}
+        {showFavorit && favoritProducts.length>0 && !search && activeCat==='Semua' && (
+          <div style={{background:'#fff',borderBottom:'6px solid #F5F6FA',padding:'10px 12px',flexShrink:0}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{fontSize:12,fontWeight:800,color:OR}}>⭐ Favorit / Terlaris</div>
+              <button onClick={()=>setShowFavorit(false)} style={{background:'none',border:'none',color:MT,fontSize:11,cursor:'pointer'}}>Sembunyikan</button>
+            </div>
+            <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4,scrollbarWidth:'none'}}>
+              {favoritProducts.map(p=>(
+                <button key={p.id} onClick={()=>{
+                    if(p.stock<=0&&!bypassStok) return alert('Stok habis! Aktifkan bypass stok di panel kanan untuk tetap menjual.');
+                    addToCart(p);
+                  }}
+                  style={{flexShrink:0,width:104,padding:'10px 8px',background:'#FFF8E1',border:`1.5px solid #F9A825`,borderRadius:12,cursor:'pointer',textAlign:'left'}}>
+                  <div style={{fontSize:11,fontWeight:700,color:TX,lineHeight:1.3,minHeight:28,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{p.name}</div>
+                  <div style={{fontSize:11,fontWeight:800,color:GD,marginTop:4}}>{fmt(p.price)}</div>
+                  <div style={{fontSize:9,color:MT,marginTop:1}}>sisa {p.stock}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!showFavorit && favoritProducts.length>0 && !search && activeCat==='Semua' && (
+          <div style={{background:'#fff',borderBottom:'1px solid #f0f0f0',padding:'4px 12px',flexShrink:0,textAlign:'right'}}>
+            <button onClick={()=>setShowFavorit(true)} style={{background:'none',border:'none',color:OR,fontSize:11,fontWeight:700,cursor:'pointer'}}>⭐ Tampilkan Favorit</button>
           </div>
         )}
 
