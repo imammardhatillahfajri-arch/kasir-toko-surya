@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-TIEREDDISKON";
+const APP_VERSION = "v14.07.2026-KATEGORIBARU";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -7846,6 +7846,7 @@ function ScanNota({onBack, onDataReady}) {
   const [showAddSupplier, setShowAddSupplier] = useState(false);
   const [newSupplier, setNewSupplier] = useState({name:'',phone:'',address:''});
   const [savingSupplier, setSavingSupplier] = useState(false);
+  const [showTambahProduk, setShowTambahProduk] = useState(null); // index item yang lagi ditambah jadi produk baru
 
   useEffect(()=>{
     sbGet('suppliers',{order:'name'}).then(s=>setSuppliers(s||[])).catch(()=>{});
@@ -8103,6 +8104,20 @@ function ScanNota({onBack, onDataReady}) {
   // ── REVIEW ──
   if(step==='review'&&extractedData) return (
     <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      {showTambahProduk!==null&&(
+        <TambahProdukBaruModal
+          initialName={extractedData.items[showTambahProduk]?.nama||''}
+          initialHarga={extractedData.items[showTambahProduk]?.harga||0}
+          allProducts={window._cachedProducts||[]}
+          onClose={()=>setShowTambahProduk(null)}
+          onCreated={(newProd)=>{
+            const idx = showTambahProduk;
+            setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===idx?{...it,product_id:newProd.id,nama:newProd.name}:it)}));
+            setShowTambahProduk(null);
+            alert('✅ Produk baru berhasil ditambahkan!');
+          }}
+        />
+      )}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
         <button onClick={()=>setStep('upload')} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:14,padding:0}}>←</button>
         <h2 style={{margin:0,fontSize:17,fontWeight:800}}>🤖 Review Hasil Scan</h2>
@@ -8318,32 +8333,7 @@ function ScanNota({onBack, onDataReady}) {
                   }
                 </select>
                 <div style={{fontSize:10,color:OR,marginBottom:4}}>⚠️ Belum dicocokkan — stok tidak akan terupdate saat diterima</div>
-                <button onClick={async()=>{
-                  // Tambah produk baru langsung dari sini
-                  const namaProduk = item.nama;
-                  const hargaBeli  = item.harga||0;
-                  const saran20    = Math.ceil(hargaBeli*1.20/100)*100;
-                  if(!confirm(`Tambah "${namaProduk}" sebagai produk baru?
-Harga beli: ${fmt(hargaBeli)}
-Harga jual saran: ${fmt(saran20)}`)) return;
-                  try {
-                    const [newProd] = await sbInsert('products',[{
-                      name:      namaProduk,
-                      price:     saran20,
-                      buy_price: hargaBeli,
-                      stock:     0,
-                      category:  'Lainnya',
-                      unit_kecil:'pcs',
-                      unit_besar:'pcs',
-                      konversi:  1,
-                    }]);
-                    // Update cache
-                    if(window._cachedProducts) window._cachedProducts.push(newProd);
-                    // Set product_id di item ini
-                    setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:newProd.id,nama:newProd.name}:it)}));
-                    alert('✅ Produk baru berhasil ditambahkan!');
-                  } catch(e){ alert('Gagal tambah produk: '+e.message); }
-                }}
+                <button onClick={()=>setShowTambahProduk(i)}
                   style={{width:'100%',padding:'7px 0',background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:8,cursor:'pointer',color:'#1976D2',fontWeight:700,fontSize:11}}>
                   ➕ Tambah sebagai Produk Baru
                 </button>
@@ -8568,6 +8558,106 @@ Harga jual saran: ${fmt(saran20)}`)) return;
 
 // ── PEMBELIAN ──────────────────────────────────────────────────────────────
 // ── Reusable: search produk dengan dropdown (ganti <select> produk) ───────────
+// ── Modal reusable: Tambah Produk Baru (dari Scan Nota AI maupun Pembelian manual) ──
+function TambahProdukBaruModal({initialName='', initialHarga=0, allProducts=[], onCreated, onClose}) {
+  const [nama, setNama]     = React.useState(initialName);
+  const [harga, setHarga]   = React.useState(initialHarga);
+  const saran20 = Math.ceil((parseInt(harga)||0)*1.20/100)*100;
+  const [hargaJual, setHargaJual] = React.useState(saran20);
+  const [kategori, setKategori]   = React.useState('');
+  const [satuan, setSatuan]       = React.useState('pcs');
+  const [saving, setSaving]       = React.useState(false);
+
+  // Daftar kategori penuh yang sudah pernah dipakai, buat saran/autocomplete
+  const kategoriOptions = React.useMemo(()=>{
+    return [...new Set(allProducts.map(p=>p.category).filter(Boolean))].sort();
+  },[allProducts]);
+  // Kategori utama saja (level 1), buat tombol cepat
+  const kategoriUtama = React.useMemo(()=>{
+    return [...new Set(kategoriOptions.map(c=>c.split(' > ')[0]).filter(Boolean))].slice(0,8);
+  },[kategoriOptions]);
+
+  const simpan = async() => {
+    if(!nama.trim()) return alert('Nama produk wajib diisi!');
+    if(!kategori.trim()) return alert('Pilih atau isi kategori dulu!');
+    setSaving(true);
+    try {
+      const [newProd] = await sbInsert('products',[{
+        name: nama.trim(),
+        price: parseInt(hargaJual)||0,
+        buy_price: parseInt(harga)||0,
+        stock: 0,
+        category: kategori.trim(),
+        unit_kecil: satuan||'pcs',
+        unit_besar: satuan||'pcs',
+        konversi: 1,
+        pakai_stok: true,
+      }]);
+      if(window._cachedProducts) window._cachedProducts.push(newProd);
+      onCreated(newProd);
+    } catch(e){ alert('Gagal tambah produk: '+e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:400,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:14}}>➕ Tambah Produk Baru</div>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Nama Produk *</label>
+        <input value={nama} onChange={e=>setNama(e.target.value)} placeholder="Nama produk..."
+          style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:10}}/>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+          <div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Harga Beli (Rp)</label>
+            <input type="number" value={harga} onChange={e=>{setHarga(e.target.value); const s=Math.ceil((parseInt(e.target.value)||0)*1.20/100)*100; setHargaJual(s);}}
+              style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Harga Jual (Rp)</label>
+            <input type="number" value={hargaJual} onChange={e=>setHargaJual(e.target.value)}
+              style={{width:'100%',padding:'9px 12px',border:`1.5px solid ${G}`,borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+          </div>
+        </div>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>📁 Kategori *</label>
+        <input value={kategori} onChange={e=>setKategori(e.target.value)} list="kategori-suggestions"
+          placeholder="mis. Bahan Bangunan > Kawat & Material"
+          style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:6}}/>
+        <datalist id="kategori-suggestions">
+          {kategoriOptions.map(k=><option key={k} value={k}/>)}
+        </datalist>
+        {kategoriUtama.length>0&&(
+          <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
+            {kategoriUtama.map(k=>(
+              <button key={k} onClick={()=>setKategori(k)}
+                style={{padding:'4px 10px',background:kategori===k?GL:'#F5F6FA',border:`1px solid ${kategori===k?G:'#eee'}`,borderRadius:12,fontSize:10,color:kategori===k?GD:MT,cursor:'pointer',fontWeight:kategori===k?700:500}}>
+                {k}
+              </button>
+            ))}
+          </div>
+        )}
+        <div style={{fontSize:10,color:MT,marginBottom:10}}>💡 Ketik kategori baru bebas, atau pilih dari yang sudah ada di atas.</div>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Satuan</label>
+        <input value={satuan} onChange={e=>setSatuan(e.target.value)} placeholder="pcs / meter / roll..."
+          style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:16}}/>
+
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={onClose} disabled={saving}
+            style={{flex:1,padding:11,background:'#eee',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer'}}>Batal</button>
+          <button onClick={simpan} disabled={saving}
+            style={{flex:2,padding:11,background:saving?MT:G,color:'#fff',border:'none',borderRadius:8,fontWeight:800,cursor:'pointer'}}>
+            {saving?'⏳ Menyimpan...':'💾 Simpan & Pakai'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProductSearchInput({products, value, onSelect, placeholder='Cari nama produk...'}) {
   const [q, setQ]           = React.useState('');
   const [open, setOpen]     = React.useState(false);
@@ -9564,6 +9654,7 @@ function Pembelian() {
   const [products,   setProducts]   = useState([]);
   const [cart,       setCart]       = useState([]); // {product, qty, price, buy_price}
   const [poUnitSel,  setPoUnitSel]  = useState(null); // modal multisatuan pembelian
+  const [showTambahProdukPembelian, setShowTambahProdukPembelian] = useState(false);
   const [poUnits,    setPoUnits]    = useState({});   // product_id -> satuan tambahan
   const [orders,     setOrders]     = useState([]);
   const [selected,   setSelected]   = useState(null);
@@ -10371,6 +10462,10 @@ function Pembelian() {
                 style={{width:'100%',padding:'9px 12px 9px 34px',border:'1.5px solid #eee',borderRadius:20,fontSize:13,outline:'none',boxSizing:'border-box'}}
                 onFocus={e=>e.target.style.borderColor=G} onBlur={e=>e.target.style.borderColor='#eee'}/>
             </div>
+            <button onClick={()=>setShowTambahProdukPembelian(true)}
+              style={{flexShrink:0,padding:'7px 12px',background:GL,border:`1px solid ${G}`,borderRadius:8,cursor:'pointer',fontWeight:700,fontSize:12,color:GD}}>
+              ➕ Baru
+            </button>
           </div>
           {/* Kategori pills */}
           <div style={{display:'flex',gap:5,overflowX:'auto',paddingBottom:2}}>
@@ -10387,10 +10482,27 @@ function Pembelian() {
         <div style={{flex:1,overflowY:'auto'}}>
           {poUnitSel&&<PembelianUnitModal product={poUnitSel.product} units={poUnitSel.units} existing={poUnitSel.existing}
             onOk={applyUnitSel} onClose={()=>setPoUnitSel(null)}/>}
+          {showTambahProdukPembelian&&(
+            <TambahProdukBaruModal
+              initialName={search}
+              allProducts={window._cachedProducts||products||[]}
+              onClose={()=>setShowTambahProdukPembelian(false)}
+              onCreated={(newProd)=>{
+                addToCart(newProd);
+                setShowTambahProdukPembelian(false);
+                setSearch('');
+                alert(`✅ "${newProd.name}" ditambahkan & langsung masuk keranjang!`);
+              }}
+            />
+          )}
           {prodLoading ? <Loading/> : filteredProds.length===0 ? (
             <div style={{textAlign:'center',padding:'48px 0',color:MT}}>
               <div style={{fontSize:36,marginBottom:10}}>🔍</div>
-              Produk tidak ditemukan
+              <div style={{marginBottom:14}}>Produk tidak ditemukan</div>
+              <button onClick={()=>setShowTambahProdukPembelian(true)}
+                style={{padding:'10px 20px',background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:700,fontSize:13,cursor:'pointer'}}>
+                ➕ Tambah "{search}" sebagai Produk Baru
+              </button>
             </div>
           ) : filteredProds.map((prod,i)=>{
             const isMulti = getUnitList(prod).length>1;
