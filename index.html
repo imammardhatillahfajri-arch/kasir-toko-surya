@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-ROUNDFIX";
+const APP_VERSION = "v14.07.2026-HPPFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -10283,10 +10283,33 @@ function Pembelian() {
       await sbUpdate('purchase_orders', po.id, {status:'Diterima'});
       const updates = [];
 
-      for(const item of po.items||[]) {
+      // ── Hitung total efektif seluruh PO (setelah diskon item, diskon nota, PPN, potongan) ──
+      // lalu sebar proporsional ke tiap barang berdasarkan bobot nilainya, supaya harga beli
+      // yang tersimpan adalah harga SEBENARNYA yang dibayar per barang — bukan harga mentah
+      // sebelum potongan/tambahan di level nota.
+      const itemSubtotals = (po.items||[]).map(it=>{
+        const raw = (parseInt(it.qty)||0)*(parseInt(it.price)||0);
+        return raw - applyTieredDiskon(raw, it.diskon_persen||'0');
+      });
+      const subtotalSemua = itemSubtotals.reduce((s,v)=>s+v,0);
+      const diskonNotaNom = applyTieredDiskon(subtotalSemua, po.diskon_persen||'0');
+      const ppnPersen = po.ppn_persen||0;
+      const potonganRp = po.potongan_nominal||0;
+
+      for(let idx=0; idx<(po.items||[]).length; idx++) {
+        const item = po.items[idx];
         let productId = item.product_id;
         let prod = null;
-        const newBuyPrice = item.price ? parseInt(item.price) : 0;
+
+        // Harga efektif barang ini = bagian proporsionalnya dari total akhir PO
+        // (setelah semua diskon/PPN/potongan ikut terhitung), dibagi qty barang ini.
+        const itemSub = itemSubtotals[idx];
+        const proporsi = subtotalSemua>0 ? (itemSub/subtotalSemua) : (1/((po.items||[]).length||1));
+        const afterDiskonNota = itemSub - diskonNotaNom*proporsi;
+        const afterPPN = afterDiskonNota * (1+ppnPersen/100);
+        const totalEfektifItem = afterPPN - potonganRp*proporsi;
+        const qtyNota = parseInt(item.qty)||0;
+        const newBuyPrice = qtyNota>0 ? Math.round(totalEfektifItem/qtyNota) : 0;
 
         // Cari by product_id dulu
         if(productId) {
