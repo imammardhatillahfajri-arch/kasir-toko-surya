@@ -77,7 +77,58 @@ Aturan:
       return res.status(200).json(JSON.parse(clean));
     }
 
-    // ── MODE: ANALYZE NOTA (foto) ──
+    // ── MODE: ANALYZE NOTA PENJUALAN MANUAL (foto catatan kasir tulisan tangan) ──
+    if (body.salesMode) {
+      const { base64, mediaType } = body;
+      const result = await callAnthropic({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1500,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text', text: `Kamu adalah asisten kasir toko listrik & bangunan di Indonesia. Baca nota penjualan MANUAL/TULISAN TANGAN ini — dicatat kasir di kertas saat toko sedang ramai, untuk dimasukkan ke sistem nanti.
+
+Kembalikan HANYA JSON tanpa markdown:
+{
+  "pelanggan": "nama pembeli jika tertulis, kosongkan (string kosong) jika tidak ada/umum",
+  "tanggal": "YYYY-MM-DD, kosongkan jika tidak tertulis",
+  "status_bayar": "Lunas atau Piutang",
+  "items": [
+    {"nama": "nama produk lengkap sesuai tulisan", "qty": angka, "harga": angka harga jual satuan, "satuan": "pcs/roll/meter/dll"}
+  ],
+  "total": angka total keseluruhan jika tertulis atau bisa dihitung,
+  "catatan": "catatan tambahan dari nota jika ada, mis. nomor HP pelanggan"
+}
+
+Aturan:
+- Angka tanpa titik/koma (Rp 1.500 ditulis 1500)
+- Tulisan tangan mungkin tidak rapi — lakukan interpretasi terbaik berdasarkan konteks toko listrik/bangunan
+- Kalau ada tulisan "blm lunas", "hutang", "kurang Rp...", atau nominal bayar lebih kecil dari total = status_bayar "Piutang"
+- Kalau tidak ada indikasi utang sama sekali = status_bayar "Lunas"
+- Kalau satuan tidak jelas, gunakan "pcs" sebagai default` }
+          ]
+        }]
+      });
+
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return res.status(500).json({ error: data.error?.message || 'API error' });
+      }
+      const text = data.content?.[0]?.text || '';
+      const clean = text.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
+
+      let parsed;
+      try { parsed = JSON.parse(clean); }
+      catch(e) {
+        const m = clean.match(/[{][\s\S]*[}]/);
+        if(m) parsed = JSON.parse(m[0]);
+        else throw new Error('AI tidak bisa membaca nota penjualan ini');
+      }
+      return res.status(200).json(parsed);
+    }
+
+    // ── MODE: ANALYZE NOTA PEMBELIAN (foto faktur/nota dari supplier) ──
     const { base64, mediaType } = body;
     const result = await callAnthropic({
       model: 'claude-sonnet-4-6',
