@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-NOTAFIX";
+const APP_VERSION = "v14.07.2026-DATEFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -674,6 +674,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   const jam       = now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
   const [printMode, setPrintMode] = useState(null);
   const [jatusTempo, setJatusTempo] = useState('');
+  const [dueDateISO, setDueDateISO] = useState(''); // sumber kebenaran (YYYY-MM-DD), jatusTempo cuma tampilan
   const [previewMode, setPreviewMode] = useState(null); // null | 'thermal' | 'a4'
   const [rangkap, setRangkap]         = useState(1);
   const [showMenu, setShowMenu]       = useState(false);
@@ -726,12 +727,17 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   // Jatuh tempo: pakai tanggal asli invoice kalau ada (mis. review piutang lama),
   // atau default 7 hari dari sekarang untuk transaksi baru
   React.useEffect(()=>{
+    let iso, d;
     if(dueDate) {
-      const d = new Date(dueDate+'T00:00:00');
-      if(!isNaN(d)) { setJatusTempo(d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'})); return; }
+      d = new Date(dueDate+'T00:00:00');
+      if(isNaN(d)) d = null;
     }
-    const d = new Date();
-    d.setDate(d.getDate()+7);
+    if(!d) {
+      d = new Date();
+      d.setDate(d.getDate()+7);
+    }
+    iso = d.toISOString().slice(0,10);
+    setDueDateISO(iso);
     setJatusTempo(d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'}));
   },[dueDate]);
 
@@ -1099,10 +1105,12 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
           {isPiutang&&(
             <div style={{background:'#FFF3E0',borderRadius:10,padding:'10px 14px',marginBottom:14,border:`1px solid ${OR}`}}>
               <div style={{fontSize:11,color:MT,marginBottom:4}}>📅 Tanggal Jatuh Tempo</div>
-              <input type="date" value={jatusTempo?new Date(jatusTempo.split(' ').reverse().map((v,i)=>i===1?['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'].indexOf(v)+1:v).join('-')).toISOString().slice(0,10):''}
+              <input type="date" value={dueDateISO}
                 onChange={e=>{
-                  const d = new Date(e.target.value);
-                  setJatusTempo(d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'}));
+                  const iso = e.target.value;
+                  setDueDateISO(iso);
+                  const d = new Date(iso+'T00:00:00');
+                  if(!isNaN(d)) setJatusTempo(d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'}));
                 }}
                 style={{width:'100%',padding:'8px 12px',border:`1.5px solid ${OR}`,borderRadius:8,fontSize:14,fontWeight:700,color:OR,boxSizing:'border-box',outline:'none'}}/>
               <div style={{fontSize:10,color:MT,marginTop:4}}>Default 7 hari dari sekarang. Bisa diubah sesuai kesepakatan.</div>
