@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-LOGOUT";
+const APP_VERSION = "v14.07.2026-ASISTENAI";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -1451,6 +1451,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
   const [metode2,      setMetode2]      = useState('QRIS'); // metode kedua
 
   // ── Simpan Pesanan (hold transaksi) — keranjang bisa disimpan & dibuka lagi nanti ──
+  const [showAsistenAI, setShowAsistenAI] = useState(false);
   const [showPesanan,   setShowPesanan]   = useState(false);
   const [pesananList,   setPesananList]   = useState([]);
   const [pesananLoading,setPesananLoading]= useState(false);
@@ -1712,6 +1713,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
         </div>
       </div>
     )}
+    {showAsistenAI && <AsistenKasirAI onClose={()=>{setShowAsistenAI(false); reload&&reload();}}/>}
     {showPesanan && (
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:1500,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
         onClick={e=>{if(e.target===e.currentTarget)setShowPesanan(false);}}>
@@ -1763,6 +1765,10 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
             {savingPesanan?'⏳':'💾'} Simpan Pesanan
           </button>
         </div>
+        <button onClick={()=>setShowAsistenAI(true)}
+          style={{width:'100%',marginTop:6,padding:'7px 0',background:'#F3E5F5',border:'1px solid #8E44AD',borderRadius:8,color:'#8E44AD',fontWeight:700,fontSize:12,cursor:'pointer'}}>
+          🤖 Asisten Kasir AI — Input dari Nota Manual
+        </button>
       </div>
 
       {/* Item List */}
@@ -8629,6 +8635,321 @@ function ScanNota({onBack, onDataReady}) {
 // ── PEMBELIAN ──────────────────────────────────────────────────────────────
 // ── Reusable: search produk dengan dropdown (ganti <select> produk) ───────────
 // ── Modal reusable: Tambah Produk Baru (dari Scan Nota AI maupun Pembelian manual) ──
+// ── ASISTEN KASIR AI: baca foto nota penjualan manual, buat transaksi otomatis ──
+// Dipakai untuk input massal di akhir hari dari catatan tulisan tangan kasir
+// saat toko sedang ramai. Alurnya sama seperti Scan Nota Pembelian, tapi hasil
+// akhirnya langsung membuat transaksi PENJUALAN (bukan PO).
+function AsistenKasirAI({onClose}) {
+  const [step, setStep] = useState('upload'); // upload | loading | review | done
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [extractedData, setExtractedData] = useState(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [showTambahProduk, setShowTambahProduk] = useState(null);
+  const [doneCount, setDoneCount] = useState(0);
+
+  useEffect(()=>{
+    if(!window._cachedProducts||window._cachedProducts.length===0) {
+      sbGetAll('products',{order:'name'}).then(p=>{ window._cachedProducts=p||[]; }).catch(()=>{});
+    }
+  },[]);
+
+  const handleFile = (file) => {
+    if(!file) return;
+    if(!file.type.startsWith('image/')) return setError('File harus berupa gambar!');
+    if(file.size > 10*1024*1024) return setError('Ukuran gambar maksimal 10MB!');
+    setImageFile(file); setError('');
+    const reader = new FileReader();
+    reader.onload = e => setImagePreview(e.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const analyzeNota = async() => {
+    if(!imageFile) return;
+    setStep('loading'); setError('');
+    try {
+      const base64 = await new Promise((res,rej)=>{
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result.split(',')[1]);
+        reader.onerror = rej;
+        reader.readAsDataURL(imageFile);
+      });
+      const response = await fetch('/api/analyze-nota', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ salesMode:true, base64, mediaType: imageFile.type })
+      });
+      if(!response.ok) {
+        const errData = await response.json().catch(()=>({error:'Server error'}));
+        throw new Error(errData.error || `Error ${response.status}`);
+      }
+      const rawText = await response.text();
+      let parsed;
+      try { parsed = JSON.parse(rawText); }
+      catch(e) {
+        const m = rawText.match(/[{][\s\S]*[}]/);
+        if(m) parsed = JSON.parse(m[0]);
+        else throw new Error('AI tidak bisa membaca nota ini. Pastikan foto jelas dan terang!');
+      }
+      // Cocokkan tiap item ke produk pakai algoritma fuzzy yang sama dengan Pembelian
+      const items = (parsed.items||[]).map(it=>{
+        const candidates = (window._cachedProducts||[])
+          .map(p=>({...p, score: productMatchScore(it.nama, p.name)}))
+          .filter(p=>p.score>=20).sort((a,b)=>b.score-a.score);
+        const best = candidates[0];
+        return {
+          ...it,
+          qty: parseQty(it.qty)||1,
+          harga: parseInt(it.harga)||0,
+          product_id: best?.id||null,
+          matched_name: best?.name||null,
+        };
+      });
+      setExtractedData({
+        pelanggan: parsed.pelanggan||'',
+        tanggal: parsed.tanggal||new Date().toISOString().slice(0,10),
+        status_bayar: parsed.status_bayar==='Piutang'?'Piutang':'Lunas',
+        items,
+        total: parseInt(parsed.total)||items.reduce((s,i)=>s+i.qty*i.harga,0),
+        catatan: parsed.catatan||'',
+      });
+      setStep('review');
+    } catch(e) {
+      setError(e.message||'Gagal menganalisis nota');
+      setStep('upload');
+    }
+  };
+
+  const totalCalc = (extractedData?.items||[]).reduce((s,i)=>s+(parseQty(i.qty)||0)*(parseInt(i.harga)||0),0);
+
+  const simpanTransaksi = async() => {
+    if(!extractedData.items.length) return alert('Tidak ada item barang!');
+    const unmatched = extractedData.items.filter(i=>!i.product_id);
+    if(unmatched.length>0) return alert(`Masih ada ${unmatched.length} barang belum dicocokkan ke produk:\n${unmatched.map(i=>'• '+i.nama).join('\n')}\n\nCocokkan dulu atau tambahkan sebagai produk baru.`);
+    setSaving(true);
+    try {
+      const isPiutang = extractedData.status_bayar==='Piutang';
+      const dibayar = isPiutang ? (parseInt(extractedData.dibayar)||0) : totalCalc;
+      const tglISO = extractedData.tanggal||new Date().toISOString().slice(0,10);
+      const createdAt = tglISO+'T'+new Date().toTimeString().slice(0,8);
+      const inv = 'INV-'+Date.now();
+
+      const [tx] = await sbInsert('transactions',[{
+        invoice_no: inv,
+        customer: extractedData.pelanggan||'Umum',
+        total: totalCalc,
+        paid: dibayar,
+        change: Math.max(0, dibayar-totalCalc),
+        status: isPiutang?'Piutang':'Lunas',
+        metode_bayar: 'Tunai',
+        due_date: isPiutang ? (()=>{const d=new Date(tglISO+'T00:00:00');d.setDate(d.getDate()+7);return d.toISOString().slice(0,10);})() : null,
+        created_at: createdAt,
+      }]);
+
+      await sbInsert('transaction_items', extractedData.items.map(i=>({
+        transaction_id: tx.id,
+        product_id: i.product_id,
+        product_name: i.matched_name||i.nama,
+        qty: parseQty(i.qty),
+        price: parseInt(i.harga)||0,
+        satuan: i.satuan||'pcs',
+      })));
+
+      // Potong stok FIFO untuk tiap barang
+      for(const i of extractedData.items) {
+        await stokKeluar(i.product_id, parseQty(i.qty), `Input Asisten AI ${inv}`);
+      }
+
+      // Catat kas masuk — pakai tanggal asli nota, bukan sekarang
+      if(dibayar>0) {
+        const shift = getActiveShift();
+        await sbInsert('payments',[{
+          transaction_id: tx.id, type:'masuk', amount: dibayar, method:'Tunai',
+          note: `Penjualan ${inv} (via Asisten AI)`, shift_id: shift?.id||null,
+          created_at: createdAt,
+        }]).catch(()=>{});
+      }
+
+      notifyDataChanged('transaction');
+      setDoneCount(c=>c+1);
+      setStep('done');
+    } catch(e){ alert('Gagal simpan transaksi: '+e.message); }
+    setSaving(false);
+  };
+
+  const reset = () => {
+    setStep('upload'); setImageFile(null); setImagePreview(null); setExtractedData(null); setError('');
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2200,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+      <div style={{background:'#fff',borderRadius:'20px 20px 0 0',width:'100%',maxWidth:600,maxHeight:'92vh',overflowY:'auto',padding:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{fontWeight:800,fontSize:17}}>🤖 Asisten Kasir AI</div>
+          <button onClick={onClose} style={{background:'#eee',border:'none',borderRadius:'50%',width:30,height:30,cursor:'pointer',fontWeight:700}}>×</button>
+        </div>
+
+        {step==='upload'&&(
+          <>
+            <div style={{fontSize:12,color:MT,marginBottom:14,background:'#F5F6FA',padding:'10px 12px',borderRadius:8}}>
+              📝 Foto catatan penjualan manual (tulisan tangan) — AI akan baca isinya, cocokkan ke produk, dan langsung buat transaksinya.
+            </div>
+            {error&&<div style={{background:'#FFF0F0',color:RD,padding:'10px 12px',borderRadius:8,fontSize:12,marginBottom:12}}>⚠️ {error}</div>}
+            {imagePreview ? (
+              <div style={{marginBottom:14}}>
+                <img src={imagePreview} style={{width:'100%',borderRadius:12,maxHeight:320,objectFit:'contain',background:'#F5F6FA'}}/>
+              </div>
+            ) : (
+              <label style={{display:'block',border:`2px dashed ${G}`,borderRadius:14,padding:'40px 16px',textAlign:'center',cursor:'pointer',marginBottom:14,background:GL}}>
+                <input type="file" accept="image/*" capture="environment" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+                <div style={{fontSize:40,marginBottom:8}}>📸</div>
+                <div style={{fontWeight:700,color:GD,fontSize:14}}>Tap untuk foto / pilih gambar nota</div>
+              </label>
+            )}
+            <div style={{display:'flex',gap:8}}>
+              {imagePreview&&(
+                <button onClick={reset} style={{flex:1,padding:13,background:'#eee',border:'none',borderRadius:12,fontWeight:700,cursor:'pointer'}}>Ganti Foto</button>
+              )}
+              <button onClick={analyzeNota} disabled={!imageFile}
+                style={{flex:2,padding:13,background:imageFile?G:MT,color:'#fff',border:'none',borderRadius:12,fontWeight:800,cursor:imageFile?'pointer':'default',fontSize:14}}>
+                🤖 Baca Nota
+              </button>
+            </div>
+          </>
+        )}
+
+        {step==='loading'&&(
+          <div style={{textAlign:'center',padding:'50px 20px'}}>
+            <div style={{fontSize:56,marginBottom:16}}>🤖</div>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>AI sedang membaca nota...</div>
+            <div style={{fontSize:12,color:MT}}>Mohon tunggu sebentar</div>
+          </div>
+        )}
+
+        {step==='review'&&extractedData&&(
+          <>
+            {showTambahProduk!==null&&(
+              <TambahProdukBaruModal
+                initialName={extractedData.items[showTambahProduk]?.nama||''}
+                initialHarga={0}
+                allProducts={window._cachedProducts||[]}
+                onClose={()=>setShowTambahProduk(null)}
+                onCreated={(newProd)=>{
+                  const idx = showTambahProduk;
+                  setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===idx?{...it,product_id:newProd.id,matched_name:newProd.name}:it)}));
+                  setShowTambahProduk(null);
+                }}
+              />
+            )}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+              <div>
+                <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>👤 Pelanggan</label>
+                <input value={extractedData.pelanggan} onChange={e=>setExtractedData(p=>({...p,pelanggan:e.target.value}))}
+                  placeholder="Umum" style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>📅 Tanggal Transaksi</label>
+                <input type="date" value={extractedData.tanggal} onChange={e=>setExtractedData(p=>({...p,tanggal:e.target.value}))}
+                  style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+              </div>
+            </div>
+
+            <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>📦 Barang ({extractedData.items.length})</div>
+            {extractedData.items.map((item,i)=>(
+              <div key={i} style={{background:item.product_id?'#F5F6FA':'#FFF8E1',borderRadius:10,padding:12,marginBottom:8,border:item.product_id?'1px solid transparent':`1.5px solid ${OR}`}}>
+                <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>{item.nama}</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
+                  <div>
+                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty</label>
+                    <input value={item.qty} onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,qty:e.target.value.replace(/[^0-9,]/g,'')}:it)}))}
+                      style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,textAlign:'center',boxSizing:'border-box'}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Harga Jual</label>
+                    <input type="number" value={item.harga} onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,harga:parseInt(e.target.value)||0}:it)}))}
+                      style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Satuan</label>
+                    <input value={item.satuan||'pcs'} onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,satuan:e.target.value}:it)}))}
+                      style={{width:'100%',padding:'6px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                  </div>
+                </div>
+                <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Cocokkan ke Produk</label>
+                <select value={item.product_id||''} onChange={e=>{
+                    const pid = e.target.value?parseInt(e.target.value):null;
+                    const prod = (window._cachedProducts||[]).find(p=>p.id===pid);
+                    setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:pid,matched_name:prod?.name||null}:it)}));
+                  }}
+                  style={{width:'100%',padding:'8px 10px',border:`1.5px solid ${item.product_id?G:OR}`,borderRadius:8,fontSize:12,background:'#fff',marginBottom:6}}>
+                  <option value="">-- Belum dicocokkan --</option>
+                  {(window._cachedProducts||[])
+                    .map(p=>({...p, score: productMatchScore(item.nama, p.name)}))
+                    .filter(p=>p.score>=20)
+                    .sort((a,b)=>b.score-a.score)
+                    .slice(0,10)
+                    .map(p=>(
+                      <option key={p.id} value={p.id}>{p.name} · Stok:{p.stock} · Jual:{fmt(p.price||0)}</option>
+                    ))}
+                </select>
+                {!item.product_id&&(
+                  <button onClick={()=>setShowTambahProduk(i)}
+                    style={{width:'100%',padding:'7px 0',background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:8,cursor:'pointer',color:'#1976D2',fontWeight:700,fontSize:11}}>
+                    ➕ Tambah sebagai Produk Baru
+                  </button>
+                )}
+              </div>
+            ))}
+
+            <div style={{display:'flex',gap:8,marginBottom:10}}>
+              {[['Lunas',G,GL],['Piutang',OR,'#FFF3D6']].map(([val,col,bg])=>(
+                <button key={val} onClick={()=>setExtractedData(p=>({...p,status_bayar:val}))}
+                  style={{flex:1,padding:11,border:`2px solid ${extractedData.status_bayar===val?col:'#eee'}`,borderRadius:10,background:extractedData.status_bayar===val?bg:'#fff',color:extractedData.status_bayar===val?col:MT,fontWeight:extractedData.status_bayar===val?800:500,cursor:'pointer'}}>
+                  {val}
+                </button>
+              ))}
+            </div>
+            {extractedData.status_bayar==='Piutang'&&(
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Sudah Dibayar (Rp) — 0 kalau belum bayar sama sekali</label>
+                <input type="number" min="0" value={extractedData.dibayar||0} onChange={e=>setExtractedData(p=>({...p,dibayar:parseInt(e.target.value)||0}))}
+                  style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+              </div>
+            )}
+
+            <div style={{display:'flex',justifyContent:'space-between',fontWeight:800,fontSize:16,padding:'10px 0',borderTop:`2px solid ${G}`,marginBottom:14}}>
+              <span>Total</span><span style={{color:G}}>{fmt(totalCalc)}</span>
+            </div>
+
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={reset} disabled={saving} style={{flex:1,padding:13,background:'#eee',border:'none',borderRadius:12,fontWeight:700,cursor:'pointer'}}>Batal</button>
+              <button onClick={simpanTransaksi} disabled={saving}
+                style={{flex:2,padding:13,background:saving?MT:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,cursor:'pointer',fontSize:14}}>
+                {saving?'⏳ Menyimpan...':'💾 Simpan Transaksi'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {step==='done'&&(
+          <div style={{textAlign:'center',padding:'40px 20px'}}>
+            <div style={{fontSize:56,marginBottom:16}}>✅</div>
+            <div style={{fontWeight:800,fontSize:18,marginBottom:6}}>Transaksi Tersimpan!</div>
+            <div style={{fontSize:13,color:MT,marginBottom:20}}>{doneCount} nota sudah diproses sesi ini. Stok & kas sudah otomatis terupdate.</div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={reset} style={{flex:2,padding:13,background:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,cursor:'pointer'}}>
+                📸 Scan Nota Berikutnya
+              </button>
+              <button onClick={onClose} style={{flex:1,padding:13,background:'#eee',border:'none',borderRadius:12,fontWeight:700,cursor:'pointer'}}>Selesai</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TambahProdukBaruModal({initialName='', initialHarga=0, allProducts=[], onCreated, onClose}) {
   const [nama, setNama]     = React.useState(initialName);
   const [harga, setHarga]   = React.useState(initialHarga);
