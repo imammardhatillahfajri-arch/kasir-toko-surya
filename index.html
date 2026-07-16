@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-MATCHFIX";
+const APP_VERSION = "v14.07.2026-LOGOUT";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -195,14 +195,19 @@ const MENU = [
   {id:"pengaturan",icon:"⚙️",label:"Pengaturan"},
 ];
 
-function Sidebar({active, onNavigate, open, onClose}) {
+function Sidebar({active, onNavigate, open, onClose, currentUser, onLogout}) {
   return <>
     {open && <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:40}}/>}
     <aside style={{position:"fixed",top:0,left:0,height:"100%",width:260,background:"#fff",boxShadow:"2px 0 12px rgba(0,0,0,0.08)",zIndex:50,display:"flex",flexDirection:"column",transform:open?"translateX(0)":"translateX(-100%)",transition:"transform 0.25s ease"}}>
       <div style={{background:G,padding:"24px 20px 20px",color:"#fff"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:48,height:48,borderRadius:"50%",background:"rgba(255,255,255,0.25)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>👤</div>
-          <div><div style={{fontWeight:700,fontSize:16}}>Surya Listrik</div><div style={{fontSize:12,opacity:0.85}}>Owner</div></div>
+          <div style={{width:48,height:48,borderRadius:"50%",background:"rgba(255,255,255,0.25)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:700}}>
+            {(currentUser?.nama||currentUser?.username||'?').slice(0,1).toUpperCase()}
+          </div>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:16,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{currentUser?.nama||currentUser?.username||'Pengguna'}</div>
+            <div style={{fontSize:12,opacity:0.85}}>{currentUser?.role==='admin'?'Admin/Owner':'Kasir'}</div>
+          </div>
         </div>
         <div style={{marginTop:12,background:"rgba(255,255,255,0.15)",borderRadius:8,padding:"6px 10px",fontSize:12,display:"flex",alignItems:"center",gap:6}}>
           <span style={{width:8,height:8,borderRadius:"50%",background:"#A8FFD0",display:"inline-block"}}/>
@@ -217,7 +222,15 @@ function Sidebar({active, onNavigate, open, onClose}) {
           </button>
         ))}
       </nav>
-      <div style={{padding:"14px 20px",borderTop:"1px solid #eee",fontSize:11,color:MT}}>v2.0 · MyKasir · Supabase</div>
+      <div style={{borderTop:"1px solid #eee",padding:"10px 12px"}}>
+        <button onClick={()=>{
+            if(confirm('Yakin mau logout dari akun ini?')) { onLogout(); onClose(); }
+          }}
+          style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"11px 0",border:`1.5px solid ${RD}`,background:"#FFF0F0",color:RD,borderRadius:10,fontWeight:700,fontSize:14,cursor:"pointer"}}>
+          🚪 Logout
+        </button>
+      </div>
+      <div style={{padding:"10px 20px 14px",borderTop:"1px solid #eee",fontSize:11,color:MT}}>{APP_VERSION} · Supabase</div>
     </aside>
   </>;
 }
@@ -1030,18 +1043,18 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
       // Teks singkat sebagai caption/pesan pendamping gambar
       const caption = `🧾 ${tokoNama}\nInvoice: ${invoice}\nTotal: ${fmt(total)}${status==='Piutang'?` · Sisa: ${fmt(Math.max(0,total-paidNum))}`:''}`;
 
-      // ── Coba buat gambar nota dari elemen struk thermal ──
+      // ── Buat gambar nota dari layout A5 (sama seperti Preview A5 Landscape) ──
       let imageFile = null;
       try {
         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
-        const target = document.getElementById('struk-thermal');
+        const target = document.getElementById('struk-a4');
         const wrapper = document.getElementById('print-root');
         if(target && wrapper && window.html2canvas) {
-          const prevLeft = wrapper.style.left, prevTop = wrapper.style.top;
-          wrapper.style.left = '0px'; wrapper.style.top = '0px'; wrapper.style.zIndex = '-1';
+          const prevLeft = wrapper.style.left, prevTop = wrapper.style.top, prevWidth = wrapper.style.width;
+          wrapper.style.left = '0px'; wrapper.style.top = '0px'; wrapper.style.zIndex = '-1'; wrapper.style.width = '900px';
           await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))); // biar layout settle
-          const canvas = await window.html2canvas(target, {scale:2, backgroundColor:'#ffffff', useCORS:true});
-          wrapper.style.left = prevLeft; wrapper.style.top = prevTop; wrapper.style.zIndex = '';
+          const canvas = await window.html2canvas(target, {scale:2, backgroundColor:'#ffffff', useCORS:true, width:900});
+          wrapper.style.left = prevLeft; wrapper.style.top = prevTop; wrapper.style.zIndex = ''; wrapper.style.width = prevWidth;
           const blob = await new Promise(res=>canvas.toBlob(res,'image/png'));
           if(blob) imageFile = new File([blob], `nota-${invoice}.png`, {type:'image/png'});
         }
@@ -12382,7 +12395,7 @@ function App() {
 
   return <div style={{minHeight:"100vh",background:GR,fontFamily:"'Segoe UI',system-ui,sans-serif"}}>
     <NetworkStatusBanner/>
-    <Sidebar active={page} onNavigate={setPage} open={sidebarOpen} onClose={()=>setSidebarOpen(false)}/>
+    <Sidebar active={page} onNavigate={setPage} open={sidebarOpen} onClose={()=>setSidebarOpen(false)} currentUser={currentUser} onLogout={handleLogout}/>
     <div>
       <TopBar title={PAGE_TITLES[page]} onMenuToggle={()=>setSidebarOpen(o=>!o)}/>
       <main style={{minHeight:"calc(100vh - 60px)",paddingBottom:70}}><ErrorBoundary pageKey={page}>{renderPage()}</ErrorBoundary></main>
