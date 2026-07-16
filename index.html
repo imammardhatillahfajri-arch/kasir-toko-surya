@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-FAVORITVOICE";
+const APP_VERSION = "v14.07.2026-PRODUKUPGRADE";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -188,7 +188,6 @@ const MENU = [
   {id:"transaksi",icon:"🛒",label:"Transaksi Penjualan"},
   {id:"pembelian",icon:"📦",label:"Pembelian Ke Supplier"},
   {id:"keuangan",icon:"💰",label:"Keuangan"},
-  {id:"ppob",icon:"⚡",label:"PPOB"},
   {id:"laporan",icon:"📊",label:"Laporan"},
   {id:"absensi",icon:"🕐",label:"Absensi"},
   {id:"shift",icon:"🖥️",label:"Shift"},
@@ -2289,6 +2288,7 @@ function Transaksi() {
   const [showMobileCart, setShowMobileCart] = useState(false);
 
   const filtered = products.filter(p=>{
+    if(p.tampilkan_transaksi===false) return false;
     const matchSearch = smartMatch(search, p.name, p.category||'');
     const matchMain   = activeCat==='Semua'   || getMain(p.category)===activeCat;
     const matchSub    = activeSub==='Semua'   || getSub(p.category)===activeSub;
@@ -3077,13 +3077,19 @@ function Manajemen() {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({name:"",price:"",stock:"",category:"",tipe_barang:"Default"});
+  const emptyForm = {
+    name:"",price:"",stock:"",category:"",tipe_barang:"Default",
+    barcode:"", stok_minimum:"", letak_rak:"", keterangan:"",
+    diskon_persen:"0", diskon_tipe:"persen", tampilkan_transaksi:true,
+  };
+  const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [unitProduct, setUnitProduct] = useState(null);
   const [variantProduct, setVariantProduct] = useState(null);
   const [productUnits, setProductUnits] = useState({});
+  const [showScanner, setShowScanner] = useState(false);
 
   const load = useCallback(async()=>{
     setLoading(true); setError(null);
@@ -3099,6 +3105,9 @@ function Manajemen() {
     unit_kecil:p.unit_kecil||"", unit_besar:p.unit_besar||"", konversi:p.konversi??"",
     harga_besar:p.harga_besar??"", category:p.category||"", tipe_barang:p.tipe_barang||"Default",
     pakai_stok: p.pakai_stok!==false,
+    barcode: p.barcode||"", stok_minimum: p.stok_minimum??"", letak_rak: p.letak_rak||"",
+    keterangan: p.keterangan||"", diskon_persen: p.diskon_persen??"0",
+    diskon_tipe: p.diskon_tipe||"persen", tampilkan_transaksi: p.tampilkan_transaksi!==false,
   }); setShowForm(true); };
   const save = async() => {
     if(!form.name||!form.price) return alert("Nama & harga wajib!");
@@ -3111,28 +3120,79 @@ function Manajemen() {
         konversi:parseInt(form.konversi)||1, harga_besar:parseInt(form.harga_besar)||0,
         category:form.category, tipe_barang:form.tipe_barang||"Default",
         pakai_stok: form.pakai_stok!==false,
+        barcode: form.barcode||null,
+        stok_minimum: parseFloat(form.stok_minimum)||0,
+        letak_rak: form.letak_rak||null,
+        keterangan: form.keterangan||null,
+        diskon_persen: parseFloat(form.diskon_persen)||0,
+        diskon_tipe: form.diskon_tipe||'persen',
+        tampilkan_transaksi: form.tampilkan_transaksi!==false,
       };
       editId ? await sbUpdate("products",editId,data) : await sbInsert("products",data);
-      setShowForm(false); setEditId(null); setForm({name:"",price:"",stock:"",category:""}); load();
+      setShowForm(false); setEditId(null); setForm(emptyForm); load();
     } catch(e) { alert("Gagal: "+e.message); }
     setSaving(false);
   };
   const del = async(id) => { if(!confirm("Hapus produk ini?")) return; try { await sbDelete("products",id); load(); } catch(e) { alert("Gagal: "+e.message); } };
 
+  const marginPct = (()=>{
+    const jual = parseFloat(form.price)||0, beli = parseFloat(form.buy_price)||0;
+    if(jual<=0) return null;
+    return Math.round(((jual-beli)/jual)*1000)/10;
+  })();
+
   if(error) return <ErrBox msg={error} onRetry={load}/>;
   return <>
     {unitProduct && <UnitModal product={unitProduct} onClose={()=>setUnitProduct(null)} onSaved={load}/>}
     {variantProduct && <VariantModal product={variantProduct} onClose={()=>setVariantProduct(null)} onSaved={load}/>}
+    {showScanner && <BarcodeScanner onDetected={(code)=>{setForm(p=>({...p,barcode:code}));setShowScanner(false);}} onClose={()=>setShowScanner(false)}/>}
     <div style={{padding:16,maxWidth:900,margin:"0 auto"}}>
     <div style={{display:"flex",gap:10,marginBottom:16}}>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari produk..."
         style={{flex:1,padding:"10px 14px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,outline:"none"}}/>
-      <button onClick={()=>{setEditId(null);setForm({name:"",price:"",stock:"",category:""});setShowForm(v=>!v);}}
+      <button onClick={()=>{setEditId(null);setForm(emptyForm);setShowForm(v=>!v);}}
         style={{padding:"10px 16px",background:G,color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer"}}>+ Tambah</button>
     </div>
     {showForm&&<div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
       <h4 style={{margin:"0 0 12px",fontSize:15}}>{editId?"✏️ Edit Produk":"➕ Tambah Produk"}</h4>
-      {[["name","Nama Produk *","text"],["price","Harga Jual Eceran (Rp) *","number"],["buy_price","Harga Beli (Rp)","number"],["stock","Stok (unit kecil)","number"],["unit_kecil","Unit Kecil (meter/pcs/buah)","text"],["unit_besar","Unit Besar (roll/box/lusin)","text"],["konversi","Konversi (1 unit besar = ? unit kecil)","number"],["harga_besar","Harga Jual Unit Besar (Rp)","number"],["category","Kategori","text"]].map(([k,label,type])=>(
+
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Nama Produk *</label>
+        <input value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))} placeholder="Nama Produk *"
+          style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}
+          onFocus={e=>e.target.style.borderColor=G} onBlur={e=>e.target.style.borderColor='#eee'}/>
+      </div>
+
+      {/* Kode/Barcode dengan tombol scan */}
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Kode / Barcode</label>
+        <div style={{display:'flex',gap:6}}>
+          <input value={form.barcode} onChange={e=>setForm(p=>({...p,barcode:e.target.value}))} placeholder="Scan atau ketik kode..."
+            style={{flex:1,padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+          <button type="button" onClick={()=>setShowScanner(true)}
+            style={{flexShrink:0,width:44,background:'#F5F6FA',border:'1.5px solid #eee',borderRadius:8,cursor:'pointer',fontSize:18}}>📷</button>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+        <div>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Beli (Rp)</label>
+          <input value={form.buy_price} onChange={e=>setForm(p=>({...p,buy_price:e.target.value}))} placeholder="Harga Beli (Rp)" type="number"
+            style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+        </div>
+        <div>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Jual Eceran (Rp) *</label>
+          <input value={form.price} onChange={e=>setForm(p=>({...p,price:e.target.value}))} placeholder="Harga Jual (Rp) *" type="number"
+            style={{width:"100%",padding:"10px 12px",border:`1.5px solid ${G}`,borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+        </div>
+      </div>
+      {marginPct!==null&&(
+        <div style={{fontSize:11,color:marginPct>=0?GD:RD,fontWeight:700,marginBottom:8,marginTop:-4}}>
+          📈 Margin Keuntungan: {marginPct}%
+        </div>
+      )}
+
+      {[["stock","Stok (unit kecil)","number"],["unit_kecil","Unit Kecil (meter/pcs/buah)","text"],["unit_besar","Unit Besar (roll/box/lusin)","text"],["konversi","Konversi (1 unit besar = ? unit kecil)","number"],["harga_besar","Harga Jual Unit Besar (Rp)","number"],["category","Kategori","text"]].map(([k,label,type])=>(
         <div key={k} style={{marginBottom:8}}>
           <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
           <input value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} placeholder={label} type={type}
@@ -3140,6 +3200,48 @@ function Manajemen() {
             onFocus={e=>e.target.style.borderColor=G} onBlur={e=>e.target.style.borderColor='#eee'}/>
         </div>
       ))}
+
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>⚠️ Batas Minimum Stok</label>
+        <input value={form.stok_minimum} onChange={e=>setForm(p=>({...p,stok_minimum:e.target.value}))} placeholder="0" type="number"
+          style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+        <div style={{fontSize:10,color:MT,marginTop:3}}>Nanti bisa dipakai buat peringatan stok menipis</div>
+      </div>
+
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>📍 Letak Rak</label>
+        <input value={form.letak_rak} onChange={e=>setForm(p=>({...p,letak_rak:e.target.value}))} placeholder="mis. Rak A3, Gudang belakang"
+          style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+      </div>
+
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Diskon Standar</label>
+        <div style={{display:'flex',gap:6}}>
+          <input value={form.diskon_persen} onChange={e=>setForm(p=>({...p,diskon_persen:e.target.value}))} placeholder="0" type="number"
+            style={{flex:1,padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+          {['persen','rp'].map(t=>(
+            <button key={t} type="button" onClick={()=>setForm(p=>({...p,diskon_tipe:t}))}
+              style={{padding:'0 16px',background:form.diskon_tipe===t?G:'#F5F6FA',color:form.diskon_tipe===t?'#fff':MT,border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>
+              {t==='persen'?'%':'Rp'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Keterangan</label>
+        <input value={form.keterangan} onChange={e=>setForm(p=>({...p,keterangan:e.target.value}))} placeholder="Catatan tambahan (opsional)"
+          style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+      </div>
+
+      <label style={{display:'flex',alignItems:'center',gap:10,background:'#F5F6FA',borderRadius:10,padding:'11px 14px',marginBottom:8,cursor:'pointer'}}>
+        <input type="checkbox" checked={form.tampilkan_transaksi!==false} onChange={e=>setForm(p=>({...p,tampilkan_transaksi:e.target.checked}))}
+          style={{width:17,height:17,accentColor:G,flexShrink:0}}/>
+        <div>
+          <div style={{fontSize:13,fontWeight:700}}>👁️ Tampilkan di Transaksi</div>
+          <div style={{fontSize:10,color:MT}}>Kalau dimatikan, produk disembunyikan dari menu Jual (tapi tetap ada di data)</div>
+        </div>
+      </label>
       <label style={{display:'flex',alignItems:'center',gap:10,background:'#F5F6FA',borderRadius:10,padding:'11px 14px',marginBottom:8,cursor:'pointer'}}>
         <input type="checkbox" checked={form.pakai_stok!==false} onChange={e=>setForm(p=>({...p,pakai_stok:e.target.checked}))}
           style={{width:17,height:17,accentColor:G,flexShrink:0}}/>
@@ -3189,22 +3291,36 @@ function Manajemen() {
     {loading?<Loading/>:(
       <div style={{background:"#fff",borderRadius:12,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
         {filtered.length===0&&<div style={{textAlign:"center",padding:"32px 0",color:MT}}>Belum ada produk. Tambah dulu!</div>}
-        {filtered.map((p,i)=>(
-          <div key={p.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderBottom:i<filtered.length-1?"1px solid #f0f0f0":"none"}}>
-            <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{p.name}</div><div style={{fontSize:12,color:MT}}>{p.category||"—"}</div></div>
-            <div style={{textAlign:"right",marginRight:12}}><div style={{fontWeight:700,color:G}}>{fmt(p.price)}</div><div style={{fontSize:12,color:p.stock<20?RD:MT}}>Stok: {p.stock}</div></div>
-            <div style={{display:"flex",gap:6}}>
+        {filtered.map((p,i)=>{
+          const lowStock = (p.stok_minimum||0)>0 && p.stock<=p.stok_minimum;
+          return (
+          <div key={p.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderBottom:i<filtered.length-1?"1px solid #f0f0f0":"none",background:p.tampilkan_transaksi===false?'#FAFAFA':'#fff'}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:14,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                {p.name}
+                {p.tampilkan_transaksi===false&&<span style={{fontSize:9,fontWeight:700,color:MT,background:'#eee',borderRadius:5,padding:'1px 6px'}}>Disembunyikan</span>}
+                {lowStock&&<span style={{fontSize:9,fontWeight:700,color:RD,background:'#FFF0F0',borderRadius:5,padding:'1px 6px'}}>⚠️ Stok Menipis</span>}
+              </div>
+              {p.barcode&&<div style={{fontSize:11,color:MT,marginTop:1}}>{p.barcode}</div>}
+              <div style={{fontSize:12,color:MT,marginTop:1}}>{p.category||"—"}{p.letak_rak?` · 📍${p.letak_rak}`:''}</div>
+              {p.buy_price>0&&(
+                <div style={{display:'inline-block',fontSize:10,color:MT,background:'#F5F6FA',borderRadius:5,padding:'2px 7px',marginTop:4}}>
+                  Hrg Dasar {fmt(p.buy_price)}
+                </div>
+              )}
+            </div>
+            <div style={{textAlign:"right",marginRight:12,flexShrink:0}}><div style={{fontWeight:700,color:G}}>{fmt(p.price)}</div><div style={{fontSize:12,color:lowStock?RD:MT,fontWeight:lowStock?700:400}}>Stok: {p.stock}</div></div>
+            <div style={{display:"flex",gap:6,flexShrink:0}}>
               <button onClick={()=>openEdit(p)} style={{padding:"6px 10px",background:GL,border:`1px solid ${G}`,borderRadius:6,cursor:"pointer",fontSize:13,color:GD}}>✏️</button>
               <button onClick={()=>del(p.id)} style={{padding:"6px 10px",background:"#FFF0F0",border:`1px solid ${RD}`,borderRadius:6,cursor:"pointer",fontSize:13,color:RD}}>🗑️</button>
             </div>
           </div>
-        ))}
+        );})}
       </div>
     )}
   </div>
   </>;
 }
-
 
 // ── MANAJEMEN STOK ─────────────────────────────────────────────────────────
 function ManajemenStok() {
@@ -11275,22 +11391,6 @@ function Pembelian() {
 
 
 // ── STATIC PAGES ───────────────────────────────────────────────────────────
-function PPOB() {
-  const services=[["⚡","Listrik PLN"],["📱","Pulsa"],["💧","PDAM"],["🌐","Internet"],["📺","TV Kabel"],["🏛️","BPJS"],["🚗","Pajak Kend."],["✈️","Tiket"]];
-  return <div style={{padding:16,maxWidth:900,margin:"0 auto"}}>
-    <div style={{background:"linear-gradient(120deg,#3498DB,#2980B9)",borderRadius:12,padding:16,color:"#fff",marginBottom:16}}>
-      <div style={{fontSize:13,opacity:0.85}}>Saldo PPOB</div>
-      <div style={{fontSize:28,fontWeight:800,marginTop:4}}>{fmt(2500000)}</div>
-      <button style={{marginTop:10,padding:"8px 18px",background:"rgba(255,255,255,0.2)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:6,color:"#fff",cursor:"pointer",fontSize:13}}>+ Top Up</button>
-    </div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
-      {services.map(([icon,label])=><button key={label} style={{background:"#fff",border:"1px solid #eee",borderRadius:12,padding:"16px 8px",cursor:"pointer",textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
-        <div style={{fontSize:28}}>{icon}</div><div style={{fontSize:11,marginTop:6,fontWeight:600,color:TX}}>{label}</div>
-      </button>)}
-    </div>
-  </div>;
-}
-
 function Absensi() {
   const employees=[{name:"Ahmad Rizki",role:"Kasir",in:"08:02",status:"Hadir"},{name:"Siti Nurhaliza",role:"Admin",in:"07:58",status:"Hadir"},{name:"Budi Setiawan",role:"Gudang",in:"-",status:"Izin"}];
   const sc={Hadir:G,Izin:OR};
@@ -12651,7 +12751,7 @@ const PAGE_TITLES = {
   dashboard:'Dashboard', transaksi:'Transaksi Penjualan',
   pembelian:'Pembelian', keuangan:'Keuangan',
   laporan:'Laporan', manajemen:'Manajemen',
-  pengaturan:'Pengaturan', ppob:'PPOB',
+  pengaturan:'Pengaturan',
   absensi:'Absensi', shift:'Shift',
 };
 
@@ -12797,7 +12897,6 @@ function App() {
       case "manajemen":  return isAdmin ? <ManajemenHub refreshKey={refreshKey}/> : null;
       case "keuangan":   return isAdmin ? <Keuangan refreshKey={refreshKey}/> : null;
       case "laporan":    return <Laporan/>;
-      case "ppob":       return <PPOB/>;
       case "absensi":    return <Absensi/>;
       case "shift":      return <Shift/>;
       case "pembelian":  return <Pembelian/>;
