@@ -57,7 +57,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-NOTATAGIHAN";
+const APP_VERSION = "v14.07.2026-NOTAFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -667,7 +667,7 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
 }
 
 
-function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, status, onNew, kasirName, txId}) {
+function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, status, onNew, kasirName, txId, dueDate}) {
   const change    = paidNum - total;
   const now       = new Date();
   const tgl       = now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
@@ -723,12 +723,17 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   const qrUrl    = `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`${invoice}|${total}|${tgl}|${kodeUnik}`)}`;
   const qrSmall  = `https://api.qrserver.com/v1/create-qr-code/?size=75x75&data=${encodeURIComponent(`${invoice}|${total}|${tgl}|${kodeUnik}`)}`;
 
-  // Default jatuh tempo: 7 hari dari sekarang
+  // Jatuh tempo: pakai tanggal asli invoice kalau ada (mis. review piutang lama),
+  // atau default 7 hari dari sekarang untuk transaksi baru
   React.useEffect(()=>{
+    if(dueDate) {
+      const d = new Date(dueDate+'T00:00:00');
+      if(!isNaN(d)) { setJatusTempo(d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'})); return; }
+    }
     const d = new Date();
     d.setDate(d.getDate()+7);
     setJatusTempo(d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'}));
-  },[]);
+  },[dueDate]);
 
   // Print CSS
   React.useEffect(()=>{
@@ -3413,130 +3418,6 @@ function genRefNo() {
 }
 
 // ── Cetak Invoice Pembelian PO (dipakai di detail PO & di Hutang Supplier) ──
-// ── Cetak Nota Tagihan Piutang (A5 atau Thermal 58mm) ───────────────────────
-function printNotaTagihan(invoice, items, payments, format='a5') {
-  const tokoNama   = window.TOKO_NAMA||'SURYA LISTRIK';
-  const tokoAlamat = window.TOKO_ALAMAT||'';
-  const tokoTelp   = window.TOKO_TELP||'';
-  const total = invoice.total||0;
-  const paid  = invoice.paid||0;
-  const sisa  = Math.max(0, total-paid);
-  const today = new Date().toISOString().slice(0,10);
-  const overdue = invoice.due_date && invoice.due_date<today && sisa>0;
-  const w = window.open('','_blank', format==='thermal'?'width=400,height=700':'width=800,height=600');
-
-  const itemsRows58 = items.map(it=>`
-    <div style="margin-bottom:3px">
-      <div style="font-weight:600;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.product_name||it.name}</div>
-      <div style="display:flex;justify-content:space-between;font-size:8px;color:#555">
-        <span>${it.qty} ${it.satuan||'pcs'} x ${(it.price||0).toLocaleString('id-ID')}</span>
-        <span style="font-weight:700;color:#000">Rp ${((it.qty||0)*(it.price||0)).toLocaleString('id-ID')}</span>
-      </div>
-    </div>`).join('');
-
-  const payRows58 = payments.length ? payments.map((p,i)=>`
-    <div style="display:flex;justify-content:space-between;font-size:8px;margin-bottom:2px">
-      <span>${(p.created_at||'').slice(0,10)}</span><span>Rp ${(p.amount||0).toLocaleString('id-ID')}</span>
-    </div>`).join('') : '<div style="font-size:8px;color:#777">Belum ada pembayaran</div>';
-
-  const itemsRowsA5 = items.map((it,i)=>`
-    <tr>
-      <td>${i+1}</td><td>${it.product_name||it.name}</td>
-      <td style="text-align:center">${it.qty} ${it.satuan||'pcs'}</td>
-      <td style="text-align:right">Rp ${(it.price||0).toLocaleString('id-ID')}</td>
-      <td style="text-align:right">Rp ${((it.qty||0)*(it.price||0)).toLocaleString('id-ID')}</td>
-    </tr>`).join('');
-
-  const payRowsA5 = payments.length ? payments.map((p,i)=>`
-    <tr><td>${i+1}</td><td>${(p.created_at||'').slice(0,10)}</td><td style="text-align:right">Rp ${(p.amount||0).toLocaleString('id-ID')}</td></tr>
-  `).join('') : '<tr><td colspan="3" style="text-align:center;color:#777">Belum ada pembayaran</td></tr>';
-
-  if(format==='thermal') {
-    w.document.write(`<!DOCTYPE html><html><head><title>Nota Tagihan ${invoice.invoice_no}</title>
-    <style>
-      body{font-family:'Courier New',monospace;font-size:10px;line-height:1.5;color:#000;background:#fff;padding:8px 10px;width:200px;margin:0 auto}
-      .center{text-align:center}.dash{border-top:1px dashed #999;margin:6px 0;padding-top:4px}
-      .row{display:flex;justify-content:space-between}
-      @media print{@page{margin:0;size:58mm auto}button{display:none}}
-    </style></head><body>
-      <div class="center" style="font-weight:700;font-size:13px">${tokoNama}</div>
-      ${tokoAlamat?`<div class="center" style="font-size:8px;color:#555">${tokoAlamat}</div>`:''}
-      ${tokoTelp?`<div class="center" style="font-size:8px;color:#555">Telp: ${tokoTelp}</div>`:''}
-      <div class="center" style="font-weight:800;font-size:12px;margin-top:6px">NOTA TAGIHAN</div>
-      <div class="dash">
-        <div>No: ${invoice.invoice_no}</div>
-        <div>Tgl: ${invoice.created_at?.slice(0,10)||'-'}</div>
-        <div>Plgn: ${invoice.customer||'Umum'}</div>
-        ${invoice.due_date?`<div style="${overdue?'color:#c0392b;font-weight:700':''}">Jatuh Tempo: ${invoice.due_date}${overdue?' (LEWAT!)':''}</div>`:''}
-      </div>
-      <div class="dash">${itemsRows58}</div>
-      <div class="dash">
-        <div class="row"><span>Total Tagihan</span><span style="font-weight:700">Rp ${total.toLocaleString('id-ID')}</span></div>
-        <div class="row"><span>Sudah Dibayar</span><span>Rp ${paid.toLocaleString('id-ID')}</span></div>
-      </div>
-      <div class="dash" style="background:#f5f5f5;padding:4px">
-        <div class="row" style="font-weight:800;font-size:12px"><span>SISA TAGIHAN</span><span style="color:#c0392b">Rp ${sisa.toLocaleString('id-ID')}</span></div>
-      </div>
-      <div class="dash"><div style="font-weight:700;font-size:9px;margin-bottom:3px">Riwayat Bayar:</div>${payRows58}</div>
-      <div class="center dash" style="font-size:8px;color:#777">${window.STRUK_FOOTER||'Mohon segera lunasi tagihan ini. Terima kasih.'}</div>
-      <div class="center" style="margin-top:10px"><button onclick="window.print()" style="padding:8px 20px;background:#1a472a;color:#fff;border:none;border-radius:6px;font-size:11px">🖨️ Print</button></div>
-    </body></html>`);
-  } else {
-    w.document.write(`<!DOCTYPE html><html><head><title>Nota Tagihan ${invoice.invoice_no}</title>
-    <style>
-      body{font-family:Arial,sans-serif;padding:24px;color:#222;max-width:600px;margin:0 auto}
-      h1{color:#1a472a;font-size:20px;margin:0}
-      .header{display:flex;justify-content:space-between;border-bottom:3px solid #1a472a;padding-bottom:14px;margin-bottom:16px}
-      .badge{background:#FFF0F0;color:#c0392b;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700}
-      table{width:100%;border-collapse:collapse;margin:12px 0}
-      th{background:#1a472a;color:#fff;padding:8px 10px;text-align:left;font-size:12px}
-      td{padding:7px 10px;border-bottom:1px solid #eee;font-size:12px}
-      .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0;background:#F5F6FA;padding:12px;border-radius:8px}
-      .info-item label{font-size:10px;color:#777;display:block}
-      .info-item span{font-weight:600;font-size:12px}
-      .sisa-box{background:#FFF0F0;border:2px solid #c0392b;border-radius:10px;padding:14px;margin-top:14px;text-align:right}
-      @media print{body{padding:8px}button{display:none}}
-    </style></head><body>
-      <div class="header">
-        <div>
-          <h1>${tokoNama}</h1>
-          <div style="font-size:11px;color:#777;margin-top:3px">${tokoAlamat}</div>
-          <div style="font-size:11px;color:#777">Telp: ${tokoTelp}</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:16px;font-weight:800;color:#1a472a">NOTA TAGIHAN</div>
-          <div style="font-size:12px;color:#777;margin-top:3px">No: ${invoice.invoice_no}</div>
-          <div class="badge">${overdue?'⚠️ JATUH TEMPO LEWAT':'BELUM LUNAS'}</div>
-        </div>
-      </div>
-      <div class="info-grid">
-        <div class="info-item"><label>Pelanggan</label><span>${invoice.customer||'Umum'}</span></div>
-        <div class="info-item"><label>Tanggal Transaksi</label><span>${invoice.created_at?.slice(0,10)||'-'}</span></div>
-        <div class="info-item"><label>Jatuh Tempo</label><span style="${overdue?'color:#c0392b':''}">${invoice.due_date||'Tidak diset'}</span></div>
-        <div class="info-item"><label>Total Tagihan</label><span>Rp ${total.toLocaleString('id-ID')}</span></div>
-      </div>
-      <table>
-        <thead><tr><th>#</th><th>Nama Barang</th><th style="text-align:center">Qty</th><th style="text-align:right">Harga</th><th style="text-align:right">Subtotal</th></tr></thead>
-        <tbody>${itemsRowsA5}
-          <tr style="font-weight:800"><td colspan="4" style="text-align:right">TOTAL</td><td style="text-align:right">Rp ${total.toLocaleString('id-ID')}</td></tr>
-        </tbody>
-      </table>
-      <div style="font-weight:700;font-size:13px;margin-top:16px">Riwayat Pembayaran</div>
-      <table>
-        <thead><tr><th>#</th><th>Tanggal</th><th style="text-align:right">Jumlah</th></tr></thead>
-        <tbody>${payRowsA5}</tbody>
-      </table>
-      <div class="sisa-box">
-        <div style="font-size:12px;color:#777">SISA TAGIHAN YANG HARUS DIBAYAR</div>
-        <div style="font-size:24px;font-weight:800;color:#c0392b">Rp ${sisa.toLocaleString('id-ID')}</div>
-      </div>
-      <div style="text-align:center;margin-top:20px;color:#777;font-size:11px">${window.STRUK_FOOTER||'Mohon segera lunasi tagihan ini. Terima kasih.'}</div>
-      <div style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Nota Tagihan</button></div>
-    </body></html>`);
-  }
-  w.document.close();
-}
-
 function printInvoicePO(po) {
   const tokoNama = window.TOKO_NAMA||'SURYA LISTRIK';
   const tokoAlamat = window.TOKO_ALAMAT||'';
@@ -3946,7 +3827,6 @@ function HutangPiutang() {
   const [saving, setSaving]       = useState(false);
   const [showStruk, setShowStruk] = useState(false);
   const [piutangPayments, setPiutangPayments] = useState([]);
-  const [showNotaFormat, setShowNotaFormat] = useState(false);
 
   const [customers, setCustomers] = useState([]);
 
@@ -4211,6 +4091,7 @@ function HutangPiutang() {
       status={selectedInvoice.status}
       kasirName={selectedInvoice.dilayani_oleh||'Admin'}
       txId={selectedInvoice.id}
+      dueDate={selectedInvoice.due_date}
       onNew={()=>setShowStruk(false)}
     />
   );
@@ -4227,23 +4108,9 @@ function HutangPiutang() {
             <div style={{fontWeight:700,fontSize:14}}>{selectedCustomer?.name||selectedInvoice.customer||'Umum'}</div>
             <div style={{fontSize:10,color:MT,fontFamily:'monospace'}}>{selectedInvoice.invoice_no}</div>
           </div>
-          <div style={{marginLeft:'auto',display:'flex',gap:6,position:'relative'}}>
-            <button onClick={()=>setShowNotaFormat(v=>!v)} style={{background:'#eee',border:'none',borderRadius:8,padding:'6px 12px',cursor:'pointer',fontSize:12,fontWeight:600}}>
-              🧾 Cetak Nota Tagihan
-            </button>
-            {showNotaFormat&&(
-              <div style={{position:'absolute',top:'100%',right:0,marginTop:4,background:'#fff',border:'1px solid #eee',borderRadius:10,boxShadow:'0 4px 16px rgba(0,0,0,0.15)',overflow:'hidden',zIndex:50,minWidth:160}}>
-                <button onClick={()=>{printNotaTagihan(selectedInvoice,txItems,piutangPayments,'a5');setShowNotaFormat(false);}}
-                  style={{display:'block',width:'100%',padding:'10px 14px',background:'#fff',border:'none',borderBottom:'1px solid #f0f0f0',cursor:'pointer',fontSize:12,textAlign:'left',fontWeight:600}}>
-                  📄 Format A5
-                </button>
-                <button onClick={()=>{printNotaTagihan(selectedInvoice,txItems,piutangPayments,'thermal');setShowNotaFormat(false);}}
-                  style={{display:'block',width:'100%',padding:'10px 14px',background:'#fff',border:'none',cursor:'pointer',fontSize:12,textAlign:'left',fontWeight:600}}>
-                  🧾 Thermal 58mm
-                </button>
-              </div>
-            )}
-          </div>
+          <button onClick={()=>setShowStruk(true)} style={{marginLeft:'auto',background:'#eee',border:'none',borderRadius:8,padding:'6px 12px',cursor:'pointer',fontSize:12,fontWeight:600}}>
+            🧾 Lihat Nota
+          </button>
         </div>
 
         {/* Status badge */}
@@ -6496,6 +6363,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
           status={selected.status}
           kasirName={selected.dilayani_oleh||selected.kasir||'Admin'}
           txId={selected.id}
+          dueDate={selected.due_date}
           onNew={()=>setShowStruk(false)}
         />
       )}
