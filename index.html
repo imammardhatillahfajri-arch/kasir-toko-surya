@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-HAPUSPOFIX";
+const APP_VERSION = "v14.07.2026-ZAKATHAUL";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -8594,6 +8594,7 @@ function Laporan({refreshKey}) {
   if(subPage==='arus')        return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><LaporanArusStok period={period}/></div>;
   if(subPage==='retur')       return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><ReturHistory period={period}/></div>;
   if(subPage==='txlist')      return <LaporanPenjualanTx onBack={()=>setSubPage(null)}/>;
+  if(subPage==='zakat')       return <ZakatMalCalculator onBack={()=>setSubPage(null)}/>;
 
   const menuItems = [
     {icon:'📊',label:'Ringkasan Penjualan',sub:'Transaksi hari ini & kemarin',page:'ringkasan',color:'#E8F5E9',border:G},
@@ -8603,6 +8604,7 @@ function Laporan({refreshKey}) {
     {icon:'📦',label:'Laporan Pembelian',sub:'Semua PO ke supplier',page:'pembelian',color:'#FCE4EC',border:'#E91E63'},
     {icon:'👥',label:'Laporan Pengunjung',sub:'Kunjungan & belanja per pelanggan',page:'pengunjung',color:'#E0F2F1',border:'#009688'},
     {icon:'🔄',label:'Laporan Retur',sub:'Semua data retur',page:'retur',color:'#FFF0F0',border:RD},
+    {icon:'🕌',label:'Kalkulator Zakat Mal',sub:'Zakat perniagaan 2,5% dari aset bersih',page:'zakat',color:'#E0F7E9',border:'#1B7A43'},
   ];
 
   return (
@@ -8663,6 +8665,215 @@ function Laporan({refreshKey}) {
 }
 
 // ── LAPORAN PENJUALAN TX (sub dari Laporan Penjualan) ─────────────────────
+// ── Kalkulator Zakat Mal (Zakat Perniagaan) ─────────────────────────────────
+function ZakatMalCalculator({onBack}) {
+  const [loading, setLoading] = useState(true);
+  const [kas, setKas] = useState('0');
+  const [persediaan, setPersediaan] = useState('0');
+  const [piutang, setPiutang] = useState('0');
+  const [hutang, setHutang] = useState('0');
+  const [hargaEmas, setHargaEmas] = useState('');
+  const [haulStart, setHaulStart] = useState('');
+  const [editingHaul, setEditingHaul] = useState(false);
+  const [haulInput, setHaulInput] = useState('');
+  const HAUL_DAYS = 354; // ≈ 1 tahun Hijriah (bulan-bulan Hijriah 354-355 hari, dipakai sebagai pendekatan)
+
+  const saveSetting = async(key, value) => {
+    try {
+      const existing = await sbGet('app_settings',{eq:{key}});
+      if(existing.length>0) await sbUpdate('app_settings', existing[0].id, {value});
+      else await sbInsert('app_settings',[{key, value}]);
+    } catch(e){ console.warn('Gagal simpan setting:', e.message); }
+  };
+
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const r = await sbGet('app_settings',{eq:{key:'zakat_haul_start'}});
+        if(r?.[0]?.value) setHaulStart(r[0].value);
+      } catch(e){}
+    })();
+  },[]);
+
+  const mulaiHaul = async(tanggal) => {
+    setHaulStart(tanggal);
+    setEditingHaul(false);
+    await saveSetting('zakat_haul_start', tanggal);
+  };
+
+  const haulInfo = (()=>{
+    if(!haulStart) return null;
+    const start = new Date(haulStart+'T00:00:00');
+    const end = new Date(start); end.setDate(end.getDate()+HAUL_DAYS);
+    const today = new Date(); today.setHours(0,0,0,0);
+    const diffDays = Math.round((end-today)/86400000);
+    return {
+      endDate: end.toISOString().slice(0,10),
+      diffDays,
+      status: diffDays>7 ? 'jauh' : diffDays>=0 ? 'dekat' : 'lewat',
+    };
+  })();
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try {
+        // Nilai Persediaan = total (stok x harga beli) seluruh produk
+        const products = await sbGetAll('products',{order:'name'});
+        const nilaiPersediaan = products.reduce((s,p)=>s+(p.stock||0)*(p.buy_price||0),0);
+
+        // Piutang lancar = total belum dibayar dari transaksi berstatus Piutang
+        const transaksi = await sbGetAll('transactions',{order:'created_at',asc:false});
+        const totalPiutang = transaksi.filter(t=>t.status==='Piutang').reduce((s,t)=>s+Math.max(0,(t.total||0)-(t.paid||0)),0);
+
+        // Hutang jangka pendek = PO belum lunas + hutang manual
+        const pos = await sbGetAll('purchase_orders',{order:'created_at',asc:false});
+        const hutangPO = pos.filter(po=>po.bayar==='Hutang').reduce((s,po)=>s+Math.max(0,(po.total||0)-(po.paid||0)),0);
+        const debts = await sbGetAll('debts',{order:'id',asc:false}).catch(()=>[]);
+        const hutangManual = (debts||[]).filter(d=>d.type==='hutang'&&d.status!=='Lunas').reduce((s,d)=>s+Math.max(0,(d.amount||0)-(d.paid||0)),0);
+
+        // Saran kas = akumulasi semua arus kas (masuk - keluar) dari tabel payments
+        const pays = await sbGetAll('payments',{order:'id',asc:false}).catch(()=>[]);
+        const saranKas = (pays||[]).reduce((s,p)=>s+(p.type==='masuk'?(p.amount||0):-(p.amount||0)),0);
+
+        setPersediaan(String(Math.round(nilaiPersediaan)));
+        setPiutang(String(Math.round(totalPiutang)));
+        setHutang(String(Math.round(hutangPO+hutangManual)));
+        setKas(String(Math.max(0,Math.round(saranKas))));
+      } catch(e){ console.warn('Gagal hitung otomatis:', e.message); }
+      setLoading(false);
+    })();
+  },[]);
+
+  const n = (v) => parseFloat(String(v).replace(/[^0-9.-]/g,''))||0;
+  const assetZakat = n(kas)+n(persediaan)+n(piutang);
+  const assetBersih = Math.max(0, assetZakat - n(hutang));
+  const nisab = n(hargaEmas) * 85;
+  const wajibZakat = n(hargaEmas)>0 && assetBersih >= nisab;
+  const zakatWajib = wajibZakat ? Math.round(assetBersih * 0.025) : 0;
+
+  const field = (label, val, setter, color) => (
+    <div style={{marginBottom:10}}>
+      <label style={{fontSize:12,color:MT,fontWeight:600,display:'block',marginBottom:4}}>{label}</label>
+      <input value={fmt(n(val))} onChange={e=>setter(e.target.value.replace(/[^0-9]/g,''))}
+        style={{width:'100%',padding:'10px 12px',border:`1.5px solid ${color||'#eee'}`,borderRadius:8,fontSize:14,fontWeight:700,boxSizing:'border-box'}}/>
+    </div>
+  );
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🕌 Kalkulator Zakat Mal</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:16}}>Zakat perniagaan — 2,5% dari aset bersih usaha, kalau sudah mencapai nisab (85 gram emas) dan sudah dimiliki selama 1 tahun (haul).</div>
+
+      {loading && <div style={{fontSize:12,color:MT,marginBottom:10}}>⏳ Menghitung otomatis dari data toko...</div>}
+
+      {/* Panel Haul */}
+      <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14}}>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>📅 Pengingat Haul</div>
+        {!haulStart||editingHaul ? (
+          <>
+            <div style={{fontSize:11,color:MT,marginBottom:8}}>
+              Set tanggal mulai dihitung — bisa tanggal usaha berdiri, atau tanggal terakhir kali bayar zakat.
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <input type="date" value={haulInput} onChange={e=>setHaulInput(e.target.value)}
+                style={{flex:1,padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+              <button onClick={()=>haulInput&&mulaiHaul(haulInput)}
+                style={{padding:'10px 18px',background:'#1B7A43',color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>
+                Simpan
+              </button>
+              {haulStart&&(
+                <button onClick={()=>setEditingHaul(false)} style={{padding:'10px 14px',background:'#eee',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600}}>Batal</button>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:6}}>
+              <span style={{color:MT}}>Mulai Dihitung</span><span style={{fontWeight:700}}>{haulStart}</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:10}}>
+              <span style={{color:MT}}>Perkiraan Tanggal Haul</span><span style={{fontWeight:700}}>{haulInfo.endDate}</span>
+            </div>
+            {haulInfo.status==='lewat' && (
+              <div style={{background:'#FFF0F0',border:`1.5px solid ${RD}`,borderRadius:10,padding:'10px 12px',textAlign:'center',marginBottom:8}}>
+                <div style={{fontWeight:800,color:RD,fontSize:13}}>🔔 Haul sudah lewat {Math.abs(haulInfo.diffDays)} hari!</div>
+                <div style={{fontSize:11,color:MT,marginTop:2}}>Saatnya hitung & bayar zakat kalau sudah mencapai nisab.</div>
+              </div>
+            )}
+            {haulInfo.status==='dekat' && (
+              <div style={{background:'#FFF3D6',border:`1.5px solid ${OR}`,borderRadius:10,padding:'10px 12px',textAlign:'center',marginBottom:8}}>
+                <div style={{fontWeight:800,color:OR,fontSize:13}}>⏰ {haulInfo.diffDays===0?'Hari ini tanggal haul!':`${haulInfo.diffDays} hari lagi menuju haul`}</div>
+              </div>
+            )}
+            {haulInfo.status==='jauh' && (
+              <div style={{fontSize:11,color:MT,textAlign:'center',marginBottom:8}}>Masih {haulInfo.diffDays} hari lagi menuju haul.</div>
+            )}
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>{setHaulInput(haulStart);setEditingHaul(true);}}
+                style={{flex:1,padding:9,background:'#F5F6FA',border:'1px solid #eee',borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:600}}>
+                ✏️ Ubah Tanggal
+              </button>
+              <button onClick={()=>mulaiHaul(new Date().toISOString().slice(0,10))}
+                style={{flex:1,padding:9,background:'#E0F7E9',border:`1px solid #1B7A43`,borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:600,color:'#1B7A43'}}>
+                🔄 Reset Mulai Hari Ini
+              </button>
+            </div>
+          </>
+        )}
+        <div style={{fontSize:9,color:MT,marginTop:8}}>💡 Dihitung ≈354 hari (pendekatan 1 tahun Hijriah), bukan konversi kalender Hijriah presisi.</div>
+      </div>
+
+      <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14}}>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>💰 Aset yang Dizakati</div>
+        {field('Kas (uang tunai + rekening usaha)', kas, setKas, G)}
+        {field('Nilai Persediaan Barang Dagangan', persediaan, setPersediaan, G)}
+        {field('Piutang Lancar (kemungkinan besar tertagih)', piutang, setPiutang, G)}
+        <div style={{fontSize:10,color:MT,marginTop:-4,marginBottom:10}}>💡 Semua angka di atas terisi otomatis dari data toko, tapi bisa diubah manual kalau menurutmu kurang akurat (mis. piutang macet sebaiknya dikeluarkan).</div>
+      </div>
+
+      <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14}}>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>📉 Kewajiban (Pengurang)</div>
+        {field('Hutang Jangka Pendek (ke supplier, jatuh tempo dekat)', hutang, setHutang, RD)}
+      </div>
+
+      <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14}}>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:10}}>🥇 Harga Emas Saat Ini</div>
+        <input value={hargaEmas} onChange={e=>setHargaEmas(e.target.value.replace(/[^0-9]/g,''))} placeholder="Isi harga emas per gram (Rp)"
+          style={{width:'100%',padding:'10px 12px',border:`1.5px solid ${OR}`,borderRadius:8,fontSize:14,fontWeight:700,boxSizing:'border-box'}}/>
+        <div style={{fontSize:10,color:MT,marginTop:4}}>💡 Harga emas berubah tiap hari, isi manual sesuai harga terkini (mis. dari Pegadaian/Antam). Nisab = 85 gram × harga emas.</div>
+      </div>
+
+      <div style={{background:'#F5F6FA',borderRadius:12,padding:16,marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:6}}><span style={{color:MT}}>Total Aset Zakat</span><span style={{fontWeight:700}}>{fmt(assetZakat)}</span></div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:6}}><span style={{color:MT}}>Dikurangi Hutang</span><span style={{fontWeight:700,color:RD}}>-{fmt(n(hutang))}</span></div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:14,fontWeight:800,paddingTop:8,borderTop:'1px solid #ddd'}}><span>Aset Bersih</span><span>{fmt(assetBersih)}</span></div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginTop:8,color:MT}}><span>Nisab (85 gram emas)</span><span>{hargaEmas?fmt(nisab):'Isi harga emas dulu'}</span></div>
+      </div>
+
+      {hargaEmas&&(
+        wajibZakat ? (
+          <div style={{background:'#E0F7E9',border:'2px solid #1B7A43',borderRadius:14,padding:18,textAlign:'center'}}>
+            <div style={{fontSize:12,color:'#1B7A43',fontWeight:700,marginBottom:6}}>✅ SUDAH MENCAPAI NISAB — WAJIB ZAKAT</div>
+            <div style={{fontSize:11,color:MT,marginBottom:8}}>(dengan syarat sudah dimiliki 1 tahun / haul)</div>
+            <div style={{fontSize:28,fontWeight:800,color:'#1B7A43'}}>{fmt(zakatWajib)}</div>
+            <div style={{fontSize:11,color:MT,marginTop:4}}>2,5% × {fmt(assetBersih)}</div>
+          </div>
+        ) : (
+          <div style={{background:'#FFF3D6',border:`2px solid ${OR}`,borderRadius:14,padding:18,textAlign:'center'}}>
+            <div style={{fontSize:13,fontWeight:700,color:OR}}>ℹ️ BELUM MENCAPAI NISAB</div>
+            <div style={{fontSize:11,color:MT,marginTop:6}}>Aset bersih ({fmt(assetBersih)}) masih di bawah nisab ({fmt(nisab)}). Belum wajib zakat mal untuk saat ini.</div>
+          </div>
+        )
+      )}
+      <div style={{fontSize:10,color:MT,textAlign:'center',marginTop:14}}>
+        ⚠️ Perhitungan ini alat bantu, bukan fatwa keagamaan. Untuk kepastian hukum, konsultasikan ke lembaga amil zakat (mis. BAZNAS) atau ustadz terpercaya.
+      </div>
+    </div>
+  );
+}
+
 function LaporanPenjualanTx({onBack}) {
   return (
     <div style={{padding:16}}>
