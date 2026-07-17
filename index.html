@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PRODUKUPGRADE";
+const APP_VERSION = "v14.07.2026-BARANGNAV";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3073,23 +3073,17 @@ function UnitModal({product, onClose, onSaved}) {
 
 // ── MANAJEMEN ──────────────────────────────────────────────────────────────
 function Manajemen() {
+  const [view, setView] = useState('list'); // list | detail | edit
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [editId, setEditId] = useState(null);
-  const emptyForm = {
-    name:"",price:"",stock:"",category:"",tipe_barang:"Default",
-    barcode:"", stok_minimum:"", letak_rak:"", keterangan:"",
-    diskon_persen:"0", diskon_tipe:"persen", tampilkan_transaksi:true,
-  };
-  const [form, setForm] = useState(emptyForm);
-  const [saving, setSaving] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showNotif, setShowNotif] = useState(false);
+  const [notifFilter, setNotifFilter] = useState(null); // 'habis' | 'menipis' | null
+  const [showManStok, setShowManStok] = useState(false);
   const [unitProduct, setUnitProduct] = useState(null);
   const [variantProduct, setVariantProduct] = useState(null);
-  const [productUnits, setProductUnits] = useState({});
-  const [showScanner, setShowScanner] = useState(false);
 
   const load = useCallback(async()=>{
     setLoading(true); setError(null);
@@ -3099,23 +3093,526 @@ function Manajemen() {
   },[]);
   useEffect(()=>{load();},[load]);
 
-  const filtered = products.filter(p=>smartMatch(search, p.name, p.category||''));
-  const openEdit = (p) => { setEditId(p.id); setForm({
-    name:p.name, price:p.price, buy_price:p.buy_price??"", stock:p.stock,
-    unit_kecil:p.unit_kecil||"", unit_besar:p.unit_besar||"", konversi:p.konversi??"",
-    harga_besar:p.harga_besar??"", category:p.category||"", tipe_barang:p.tipe_barang||"Default",
-    pakai_stok: p.pakai_stok!==false,
-    barcode: p.barcode||"", stok_minimum: p.stok_minimum??"", letak_rak: p.letak_rak||"",
-    keterangan: p.keterangan||"", diskon_persen: p.diskon_persen??"0",
-    diskon_tipe: p.diskon_tipe||"persen", tampilkan_transaksi: p.tampilkan_transaksi!==false,
-  }); setShowForm(true); };
+  const stokHabisList   = products.filter(p=>p.pakai_stok!==false && (p.stock||0)<=0);
+  const stokMenipisList = products.filter(p=>p.pakai_stok!==false && (p.stok_minimum||0)>0 && (p.stock||0)>0 && (p.stock||0)<=p.stok_minimum);
+
+  let baseList = products;
+  if(notifFilter==='habis') baseList = stokHabisList;
+  else if(notifFilter==='menipis') baseList = stokMenipisList;
+  const filtered = baseList.filter(p=>smartMatch(search, p.name, p.category||''));
+
+  const refreshSelected = async(id) => {
+    try { const r = await sbGet('products',{eq:{id}}); if(r?.[0]) setSelectedProduct(r[0]); } catch(e){}
+  };
+
+  const del = async(id) => {
+    if(!confirm("Hapus produk ini?")) return;
+    try { await sbDelete("products",id); setView('list'); setSelectedProduct(null); load(); }
+    catch(e) { alert("Gagal: "+e.message); }
+  };
+
+  if(error) return <ErrBox msg={error} onRetry={load}/>;
+
+  // ── VIEW: EDIT ──
+  if(view==='edit') return (
+    <EditBarangView
+      product={selectedProduct}
+      onBack={()=>setView(selectedProduct?'detail':'list')}
+      onSaved={async(id)=>{ await load(); await refreshSelected(id); setView('detail'); }}
+      onOpenUnit={(p)=>setUnitProduct(p)}
+      onOpenVariant={(p)=>setVariantProduct(p)}
+    />
+  );
+
+  // ── VIEW: DETAIL ──
+  if(view==='detail' && selectedProduct) return (
+    <>
+      {showManStok && (
+        <ManStokModal product={selectedProduct} onClose={()=>setShowManStok(false)}
+          onSaved={async()=>{ await load(); await refreshSelected(selectedProduct.id); setShowManStok(false); }}/>
+      )}
+      <BarangDetailView
+        product={selectedProduct}
+        onBack={()=>{setView('list');load();}}
+        onManStok={()=>setShowManStok(true)}
+        onDelete={()=>del(selectedProduct.id)}
+        onEdit={()=>setView('edit')}
+        onStockDetail={()=>setView('stockDetail')}
+        onPelanggan={()=>setView('pelanggan')}
+        onSupplier={()=>setView('supplier')}
+      />
+    </>
+  );
+
+  if(view==='stockDetail' && selectedProduct) return <DetailSisaStokView product={selectedProduct} onBack={()=>setView('detail')} onRefresh={()=>refreshSelected(selectedProduct.id)}/>;
+  if(view==='pelanggan' && selectedProduct)   return <PelangganBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
+  if(view==='supplier' && selectedProduct)    return <SupplierBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
+
+  // ── VIEW: LIST (default) ──
+  return <>
+    {unitProduct && <UnitModal product={unitProduct} onClose={()=>setUnitProduct(null)} onSaved={load}/>}
+    {variantProduct && <VariantModal product={variantProduct} onClose={()=>setVariantProduct(null)} onSaved={load}/>}
+    {showNotif && (
+      <NotifStokModal
+        stokHabis={stokHabisList.length} stokMenipis={stokMenipisList.length} total={products.length}
+        onFilter={(f)=>{setNotifFilter(f);setShowNotif(false);}}
+        onClose={()=>setShowNotif(false)}/>
+    )}
+    <div style={{padding:16,maxWidth:900,margin:"0 auto"}}>
+      <div style={{display:"flex",gap:10,marginBottom:12,alignItems:'center'}}>
+        <button onClick={()=>setShowNotif(true)}
+          style={{position:'relative',flexShrink:0,background:'#F5F6FA',border:'1.5px solid #eee',borderRadius:10,width:44,height:44,cursor:'pointer',fontSize:19}}>
+          🔔
+          {(stokHabisList.length+stokMenipisList.length)>0&&(
+            <span style={{position:'absolute',top:5,right:6,width:9,height:9,borderRadius:'50%',background:RD,border:'2px solid #fff'}}/>
+          )}
+        </button>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari nama atau kode produk..."
+          style={{flex:1,padding:"10px 14px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,outline:"none"}}/>
+      </div>
+      {notifFilter&&(
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:notifFilter==='habis'?'#FFF0F0':'#FFF3D6',border:`1.5px solid ${notifFilter==='habis'?RD:OR}`,borderRadius:10,padding:'9px 14px',marginBottom:12,fontSize:12,fontWeight:700,color:notifFilter==='habis'?RD:OR}}>
+          <span>Filter aktif: {notifFilter==='habis'?'🔴 Stok Habis':'🟠 Stok Menipis'} ({filtered.length})</span>
+          <button onClick={()=>setNotifFilter(null)} style={{background:'none',border:'none',color:'inherit',fontWeight:800,cursor:'pointer',fontSize:14}}>×</button>
+        </div>
+      )}
+      <button onClick={()=>{setSelectedProduct(null);setView('edit');}}
+        style={{width:'100%',padding:"11px 0",background:G,color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",marginBottom:14,fontSize:14}}>
+        + Tambah Barang
+      </button>
+      {loading?<Loading/>:(
+        <div style={{background:"#fff",borderRadius:12,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
+          {filtered.length===0&&<div style={{textAlign:"center",padding:"32px 0",color:MT}}>Tidak ada barang ditemukan.</div>}
+          {filtered.map((p,i)=>{
+            const lowStock = (p.stok_minimum||0)>0 && p.stock>0 && p.stock<=p.stok_minimum;
+            const habis = p.pakai_stok!==false && (p.stock||0)<=0;
+            return (
+              <div key={p.id} onClick={()=>{setSelectedProduct(p);setView('detail');}}
+                style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:i<filtered.length-1?"1px solid #f0f0f0":"none",cursor:'pointer',background:p.tampilkan_transaksi===false?'#FAFAFA':'#fff'}}>
+                <div style={{width:44,height:44,borderRadius:10,background:'#F5F6FA',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,overflow:'hidden'}}>
+                  {p.foto_url ? <img src={p.foto_url} style={{width:'100%',height:'100%',objectFit:'cover'}}/> : (CAT_ICONS[(p.category||'').split(' > ')[1]]||'📦')}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                    {p.name}
+                    {habis&&<span style={{fontSize:9,fontWeight:700,color:RD,background:'#FFF0F0',borderRadius:5,padding:'1px 6px'}}>Stok Habis</span>}
+                    {!habis&&lowStock&&<span style={{fontSize:9,fontWeight:700,color:OR,background:'#FFF3D6',borderRadius:5,padding:'1px 6px'}}>Stok Menipis</span>}
+                    {p.tampilkan_transaksi===false&&<span style={{fontSize:9,fontWeight:700,color:MT,background:'#eee',borderRadius:5,padding:'1px 6px'}}>Disembunyikan</span>}
+                  </div>
+                  {p.barcode&&<div style={{fontSize:11,color:MT,marginTop:1}}>{p.barcode}</div>}
+                  {p.buy_price>0&&(
+                    <div style={{display:'inline-block',fontSize:10,color:MT,background:'#F5F6FA',borderRadius:5,padding:'2px 7px',marginTop:4}}>
+                      Hrg Dasar {fmt(p.buy_price)}
+                    </div>
+                  )}
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontWeight:700,color:G}}>{fmt(p.price)}</div>
+                  <div style={{fontSize:12,color:habis?RD:lowStock?OR:MT,fontWeight:(habis||lowStock)?700:400}}>Stok: {p.stock}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </>;
+}
+
+
+// ── Modal Notifikasi Ringkasan Stok ─────────────────────────────────────────
+function NotifStokModal({stokHabis, stokMenipis, total, onFilter, onClose}) {
+  const rows = [
+    {key:'habis', icon:'🔴', label:'Stok Habis', value:stokHabis, color:RD},
+    {key:'menipis', icon:'🟠', label:'Stok Menipis', value:stokMenipis, color:OR},
+    {key:null, icon:'📦', label:'Semua Stok', value:total, color:G},
+  ];
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:360,boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+          <div style={{fontWeight:800,fontSize:16}}>🔔 Ringkasan Stok</div>
+          <button onClick={onClose} style={{background:'#eee',border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontWeight:700}}>×</button>
+        </div>
+        {rows.map(r=>(
+          <button key={r.label} onClick={()=>onFilter(r.key)}
+            style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'13px 14px',background:'#F5F6FA',border:'none',borderRadius:10,marginBottom:8,cursor:'pointer',textAlign:'left'}}>
+            <span style={{fontSize:20}}>{r.icon}</span>
+            <span style={{flex:1,fontWeight:600,fontSize:14}}>{r.label}</span>
+            <span style={{fontWeight:800,fontSize:16,color:r.color}}>{r.value}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Halaman Detail Barang ────────────────────────────────────────────────
+function BarangDetailView({product, onBack, onManStok, onDelete, onEdit, onStockDetail, onPelanggan, onSupplier}) {
+  const p = product;
+  const rows = [
+    ['Harga jual', fmt(p.price)],
+    ['Harga dasar', fmt(p.buy_price||0)],
+    ['Diskon', (p.diskon_persen>0) ? (p.diskon_tipe==='rp'?fmt(p.diskon_persen):p.diskon_persen+'%') : '-'],
+    ['Berat', p.berat>0 ? `${p.berat} gram` : '-'],
+    ['Kode', p.barcode||'-'],
+    ['Stok', `${p.stock} ${p.unit_kecil||'pcs'}`],
+    ['Stok Minimum', p.stok_minimum>0?p.stok_minimum:'-'],
+    ['Kategori', p.category||'-'],
+    ['Letak rak', p.letak_rak||'-'],
+    ['Keterangan', p.keterangan||'-'],
+  ];
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+        <button onClick={onBack} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:22,padding:0}}>←</button>
+        <div style={{fontWeight:800,fontSize:16,flex:1}}>Barang</div>
+        <button onClick={onManStok} style={{padding:'7px 12px',background:GL,border:`1px solid ${G}`,borderRadius:8,color:GD,fontWeight:700,fontSize:12,cursor:'pointer'}}>📊 Man. Stok</button>
+        <button onClick={onDelete} style={{padding:'7px 12px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,color:RD,fontWeight:700,fontSize:12,cursor:'pointer'}}>🗑️</button>
+      </div>
+
+      <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14,textAlign:'center'}}>
+        <div style={{width:88,height:88,borderRadius:14,background:'#F5F6FA',margin:'0 auto 10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:36,overflow:'hidden'}}>
+          {p.foto_url ? <img src={p.foto_url} style={{width:'100%',height:'100%',objectFit:'cover'}}/> : (CAT_ICONS[(p.category||'').split(' > ')[1]]||'📦')}
+        </div>
+        <div style={{fontWeight:800,fontSize:16}}>{p.name}</div>
+      </div>
+
+      <div style={{background:'#fff',borderRadius:12,padding:'4px 16px',boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14}}>
+        {rows.map(([label,val],i)=>(
+          <div key={label} style={{display:'flex',justifyContent:'space-between',padding:'11px 0',borderBottom:i<rows.length-1?'1px solid #f5f5f5':'none'}}>
+            <span style={{fontSize:13,color:MT}}>{label}</span>
+            <span style={{fontSize:13,fontWeight:700,color:TX,textAlign:'right',maxWidth:'60%'}}>{val}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:14}}>
+        <button onClick={onStockDetail} style={{padding:'12px 4px',background:'#fff',border:'1.5px solid #eee',borderRadius:10,cursor:'pointer',fontSize:11,fontWeight:700,color:TX,boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}}>📦<br/>Detail Sisa Stok</button>
+        <button onClick={onPelanggan} style={{padding:'12px 4px',background:'#fff',border:'1.5px solid #eee',borderRadius:10,cursor:'pointer',fontSize:11,fontWeight:700,color:TX,boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}}>👥<br/>Pelanggan</button>
+        <button onClick={onSupplier} style={{padding:'12px 4px',background:'#fff',border:'1.5px solid #eee',borderRadius:10,cursor:'pointer',fontSize:11,fontWeight:700,color:TX,boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}}>🏭<br/>Supplier</button>
+      </div>
+
+      <button onClick={onEdit} style={{width:'100%',padding:13,background:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,fontSize:14,cursor:'pointer'}}>
+        ✏️ Edit Barang
+      </button>
+    </div>
+  );
+}
+
+// ── Modal Manajemen Stok: Tambah/Kurangi stok terkontrol (bukan timpa angka) ─
+function ManStokModal({product, onClose, onSaved}) {
+  const [tipe, setTipe] = useState('tambah'); // tambah | kurangi
+  const [jumlah, setJumlah] = useState('');
+  const [hargaDasar, setHargaDasar] = useState(product.buy_price||0);
+  const [tanggal, setTanggal] = useState(new Date().toISOString().slice(0,10));
+  const [keterangan, setKeterangan] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const simpan = async() => {
+    const qty = parseFloat(String(jumlah).replace(',','.'))||0;
+    if(qty<=0) return alert('Isi jumlah dulu!');
+    setSaving(true);
+    try {
+      if(tipe==='tambah') {
+        await sbUpdate('products', product.id, {
+          stock: (product.stock||0)+qty,
+          buy_price: parseInt(hargaDasar)||product.buy_price||0,
+        });
+        await sbInsert('stock_batches',[{
+          product_id: product.id, qty_awal: qty, qty_sisa: qty,
+          buy_price: parseInt(hargaDasar)||product.buy_price||0,
+          tanggal_masuk: tanggal,
+        }]);
+        await sbInsert('stock_logs',[{product_id:product.id, type:'masuk', qty, notes:keterangan||'Penyesuaian stok manual'}]);
+      } else {
+        await stokKeluar(product.id, qty, keterangan||'Penyesuaian stok manual (kurangi)');
+      }
+      onSaved();
+    } catch(e){ alert('Gagal: '+e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2100,display:'flex',alignItems:'flex-end',justifyContent:'center'}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'#fff',borderRadius:'20px 20px 0 0',width:'100%',maxWidth:480,padding:20,maxHeight:'88vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+          <div style={{fontWeight:800,fontSize:16}}>📊 Manajemen Stok</div>
+          <button onClick={onClose} style={{background:'#eee',border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontWeight:700}}>×</button>
+        </div>
+
+        <div style={{background:'#F5F6FA',borderRadius:10,padding:'10px 14px',marginBottom:14,textAlign:'center'}}>
+          <div style={{fontSize:11,color:MT}}>Stok Saat Ini</div>
+          <div style={{fontWeight:800,fontSize:20}}>{product.stock} {product.unit_kecil||'pcs'}</div>
+        </div>
+
+        <div style={{display:'flex',gap:8,marginBottom:14}}>
+          {[['tambah','➕ Tambah',G,GL],['kurangi','➖ Kurangi',RD,'#FFF0F0']].map(([val,label,col,bg])=>(
+            <button key={val} onClick={()=>setTipe(val)}
+              style={{flex:1,padding:11,border:`2px solid ${tipe===val?col:'#eee'}`,borderRadius:10,background:tipe===val?bg:'#fff',color:tipe===val?col:MT,fontWeight:tipe===val?800:500,cursor:'pointer'}}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Tanggal</label>
+        <input type="date" value={tanggal} onChange={e=>setTanggal(e.target.value)}
+          style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:10}}/>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Jumlah *</label>
+        <input value={jumlah} onChange={e=>setJumlah(e.target.value.replace(/[^0-9,]/g,''))} placeholder="0" inputMode="decimal"
+          style={{width:'100%',padding:'10px 12px',border:`1.5px solid ${tipe==='tambah'?G:RD}`,borderRadius:8,fontSize:14,fontWeight:700,boxSizing:'border-box',marginBottom:10}}/>
+
+        {tipe==='tambah'&&(
+          <>
+            <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Harga Dasar (Rp)</label>
+            <input type="number" value={hargaDasar} onChange={e=>setHargaDasar(e.target.value)}
+              style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:14,boxSizing:'border-box',marginBottom:10}}/>
+          </>
+        )}
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Keterangan</label>
+        <input value={keterangan} onChange={e=>setKeterangan(e.target.value)} placeholder="mis. Koreksi stok opname, barang rusak, dll"
+          style={{width:'100%',padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box',marginBottom:6}}/>
+        <div style={{fontSize:10,color:MT,marginBottom:16}}>
+          💡 Buat penambahan stok dari pembelian supplier, disarankan lewat menu <b>Pembelian</b> supaya tercatat juga di keuangan. Fitur ini cocok buat koreksi/opname.
+        </div>
+
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={onClose} disabled={saving} style={{flex:1,padding:12,background:'#eee',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Batal</button>
+          <button onClick={simpan} disabled={saving}
+            style={{flex:2,padding:12,background:saving?MT:(tipe==='tambah'?G:RD),color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer'}}>
+            {saving?'⏳ Menyimpan...':'💾 Simpan'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Halaman Detail Sisa Stok — pecahan batch FIFO per barang ────────────────
+function DetailSisaStokView({product, onBack, onRefresh}) {
+  const [batches, setBatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async()=>{
+    setLoading(true);
+    try {
+      const b = await sbGet('stock_batches',{eq:{product_id:product.id},order:'tanggal_masuk',asc:false});
+      setBatches((b||[]).filter(x=>x.qty_sisa>0));
+    } catch(e){ setBatches([]); }
+    setLoading(false);
+  },[product.id]);
+  useEffect(()=>{load();},[load]);
+
+  const sisaModal = batches.reduce((s,b)=>s+(b.qty_sisa||0)*(b.buy_price||0),0);
+  const hargaTerakhir = batches[0]?.buy_price || product.buy_price || 0;
+
+  const hapusBatch = async(b) => {
+    if(!confirm(`Hapus batch ini (sisa ${b.qty_sisa} ${product.unit_kecil||'pcs'})?\nStok produk akan ikut berkurang.`)) return;
+    try {
+      const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+      await sbc.from('stock_batches').delete().eq('id', b.id);
+      await sbUpdate('products', product.id, {stock: Math.max(0,(product.stock||0)-b.qty_sisa)});
+      await sbInsert('stock_logs',[{product_id:product.id, type:'keluar', qty:b.qty_sisa, notes:'Hapus batch stok (koreksi)'}]);
+      load(); onRefresh&&onRefresh();
+    } catch(e){ alert('Gagal: '+e.message); }
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+        <button onClick={onBack} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:22,padding:0}}>←</button>
+        <div style={{fontWeight:800,fontSize:16}}>Detail Sisa Stok</div>
+      </div>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>{product.name}</div>
+      <div style={{fontSize:11,color:MT,marginBottom:16}}>{product.barcode||'-'} · Sisa Stok: {product.stock} {product.unit_kecil||'pcs'}</div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
+        <div style={{background:'#fff',borderRadius:12,padding:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:11,color:MT,marginBottom:4}}>Harga Beli Terakhir</div>
+          <div style={{fontWeight:800,fontSize:15}}>{fmt(hargaTerakhir)}</div>
+        </div>
+        <div style={{background:'#fff',borderRadius:12,padding:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:11,color:MT,marginBottom:4}}>Sisa Modal</div>
+          <div style={{fontWeight:800,fontSize:15,color:GD}}>{fmt(sisaModal)}</div>
+        </div>
+      </div>
+
+      <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Rincian Batch (FIFO)</div>
+      {loading ? <Loading/> : batches.length===0 ? (
+        <div style={{textAlign:'center',color:MT,fontSize:13,padding:24,background:'#fff',borderRadius:12}}>Belum ada batch stok tercatat.</div>
+      ) : batches.map(b=>(
+        <div key={b.id} style={{background:'#fff',borderRadius:12,padding:'12px 14px',marginBottom:8,boxShadow:'0 1px 6px rgba(0,0,0,0.06)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:13}}>{b.tanggal_masuk}</div>
+            <div style={{fontSize:11,color:MT,marginTop:2}}>Sisa {b.qty_sisa} / {b.qty_awal} {product.unit_kecil||'pcs'}</div>
+            <div style={{fontSize:11,color:GD,fontWeight:600,marginTop:1}}>Harga Dasar: {fmt(b.buy_price||0)}</div>
+          </div>
+          <button onClick={()=>hapusBatch(b)} style={{background:'none',border:'none',color:RD,cursor:'pointer',fontSize:16}}>🗑️</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Halaman Pelanggan yang pernah beli barang ini ───────────────────────────
+function PelangganBarangView({product, onBack}) {
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState([]);
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try {
+        const items = await sbGet('transaction_items',{eq:{product_id:product.id},order:'id',asc:false,limit:500});
+        const txIds = [...new Set((items||[]).map(i=>i.transaction_id).filter(Boolean))];
+        const allTx = await sbGetAll('transactions',{order:'created_at',asc:false});
+        const txMap = {}; allTx.forEach(t=>{txMap[t.id]=t;});
+        const byCustomer = {};
+        (items||[]).forEach(it=>{
+          const tx = txMap[it.transaction_id];
+          const name = tx?.customer || 'Umum';
+          if(!byCustomer[name]) byCustomer[name] = {name, qty:0, total:0, count:0, lastDate:null};
+          byCustomer[name].qty += parseQty(it.qty)||0;
+          byCustomer[name].total += (it.qty||0)*(it.price||0);
+          byCustomer[name].count += 1;
+          const d = tx?.created_at?.slice(0,10);
+          if(d && (!byCustomer[name].lastDate || d>byCustomer[name].lastDate)) byCustomer[name].lastDate = d;
+        });
+        setRows(Object.values(byCustomer).sort((a,b)=>b.qty-a.qty));
+      } catch(e){ setRows([]); }
+      setLoading(false);
+    })();
+  },[product.id]);
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+        <button onClick={onBack} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:22,padding:0}}>←</button>
+        <div style={{fontWeight:800,fontSize:16}}>👥 Pelanggan</div>
+      </div>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>{product.name}</div>
+      {loading?<Loading/>:rows.length===0?(
+        <div style={{textAlign:'center',color:MT,fontSize:13,padding:24,background:'#fff',borderRadius:12}}>Belum ada riwayat penjualan barang ini.</div>
+      ):rows.map(r=>(
+        <div key={r.name} style={{background:'#fff',borderRadius:12,padding:'12px 14px',marginBottom:8,boxShadow:'0 1px 6px rgba(0,0,0,0.06)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:13}}>{r.name}</div>
+            <div style={{fontSize:11,color:MT,marginTop:2}}>{r.count}x transaksi · terakhir {r.lastDate||'-'}</div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontWeight:800,fontSize:14,color:G}}>{r.qty} {product.unit_kecil||'pcs'}</div>
+            <div style={{fontSize:11,color:MT}}>{fmt(r.total)}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Halaman Supplier yang pernah menyuplai barang ini ───────────────────────
+function SupplierBarangView({product, onBack}) {
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState([]);
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try {
+        const items = await sbGet('po_items',{eq:{product_id:product.id},order:'id',asc:false,limit:500});
+        const allPO = await sbGetAll('purchase_orders',{order:'created_at',asc:false});
+        const poMap = {}; allPO.forEach(po=>{poMap[po.id]=po;});
+        const bySupplier = {};
+        (items||[]).forEach(it=>{
+          const po = poMap[it.po_id];
+          const name = po?.supplier || 'Tidak diketahui';
+          if(!bySupplier[name]) bySupplier[name] = {name, qty:0, total:0, count:0, lastDate:null, lastPrice:0};
+          bySupplier[name].qty += parseInt(it.qty)||0;
+          bySupplier[name].total += (it.qty||0)*(it.price||0);
+          bySupplier[name].count += 1;
+          const d = po?.created_at?.slice(0,10);
+          if(d && (!bySupplier[name].lastDate || d>bySupplier[name].lastDate)) { bySupplier[name].lastDate = d; bySupplier[name].lastPrice = it.price||0; }
+        });
+        setRows(Object.values(bySupplier).sort((a,b)=>b.qty-a.qty));
+      } catch(e){ setRows([]); }
+      setLoading(false);
+    })();
+  },[product.id]);
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+        <button onClick={onBack} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:22,padding:0}}>←</button>
+        <div style={{fontWeight:800,fontSize:16}}>🏭 Supplier</div>
+      </div>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>{product.name}</div>
+      {loading?<Loading/>:rows.length===0?(
+        <div style={{textAlign:'center',color:MT,fontSize:13,padding:24,background:'#fff',borderRadius:12}}>Belum ada riwayat pembelian barang ini.</div>
+      ):rows.map(r=>(
+        <div key={r.name} style={{background:'#fff',borderRadius:12,padding:'12px 14px',marginBottom:8,boxShadow:'0 1px 6px rgba(0,0,0,0.06)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:13}}>{r.name}</div>
+            <div style={{fontSize:11,color:MT,marginTop:2}}>{r.count}x PO · terakhir {r.lastDate||'-'}</div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontWeight:800,fontSize:14,color:'#8E44AD'}}>{r.qty} {product.unit_kecil||'pcs'}</div>
+            <div style={{fontSize:11,color:MT}}>Terakhir: {fmt(r.lastPrice)}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Halaman Edit/Tambah Barang ──────────────────────────────────────────────
+function EditBarangView({product, onBack, onSaved, onOpenUnit, onOpenVariant}) {
+  const isNew = !product;
+  const [form, setForm] = useState({
+    name:product?.name||"", price:product?.price||"", buy_price:product?.buy_price??"",
+    stock:product?.stock||0, category:product?.category||"", tipe_barang:product?.tipe_barang||"Default",
+    unit_kecil:product?.unit_kecil||"", unit_besar:product?.unit_besar||"", konversi:product?.konversi??"",
+    harga_besar:product?.harga_besar??"", pakai_stok:product?.pakai_stok!==false,
+    barcode:product?.barcode||"", stok_minimum:product?.stok_minimum??"", letak_rak:product?.letak_rak||"",
+    keterangan:product?.keterangan||"", diskon_persen:product?.diskon_persen??"0",
+    diskon_tipe:product?.diskon_tipe||"persen", tampilkan_transaksi:product?.tampilkan_transaksi!==false,
+    berat:product?.berat??"", foto_url:product?.foto_url||"",
+  });
+  const [saving, setSaving] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [showManStok, setShowManStok] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [liveProduct, setLiveProduct] = useState(product);
+
+  const uploadFoto = async(file) => {
+    setUploadingPhoto(true);
+    try {
+      const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+      const ext = file.name?.split('.').pop() || 'jpg';
+      const filename = `produk/${Date.now()}.${ext}`;
+      const { error } = await sbc.storage.from('toko-assets').upload(filename, file, {cacheControl:'3600', upsert:false, contentType:file.type});
+      if(error) throw error;
+      const { data: urlData } = sbc.storage.from('toko-assets').getPublicUrl(filename);
+      setForm(p=>({...p, foto_url: urlData.publicUrl}));
+    } catch(e){ alert('Gagal upload foto: '+e.message); }
+    setUploadingPhoto(false);
+  };
+
+  const marginPct = (()=>{
+    const jual = parseFloat(form.price)||0, beli = parseFloat(form.buy_price)||0;
+    if(jual<=0) return null;
+    return Math.round(((jual-beli)/jual)*1000)/10;
+  })();
+
   const save = async() => {
     if(!form.name||!form.price) return alert("Nama & harga wajib!");
     setSaving(true);
     try {
       const data={
         name:form.name, price:parseInt(form.price), buy_price:parseInt(form.buy_price)||0,
-        stock:parseInt(form.stock||0),
+        stock: liveProduct ? liveProduct.stock : (parseInt(form.stock)||0),
         unit_kecil:form.unit_kecil||null, unit_besar:form.unit_besar||null,
         konversi:parseInt(form.konversi)||1, harga_besar:parseInt(form.harga_besar)||0,
         category:form.category, tipe_barang:form.tipe_barang||"Default",
@@ -3127,77 +3624,111 @@ function Manajemen() {
         diskon_persen: parseFloat(form.diskon_persen)||0,
         diskon_tipe: form.diskon_tipe||'persen',
         tampilkan_transaksi: form.tampilkan_transaksi!==false,
+        berat: parseFloat(form.berat)||0,
+        foto_url: form.foto_url||null,
       };
-      editId ? await sbUpdate("products",editId,data) : await sbInsert("products",data);
-      setShowForm(false); setEditId(null); setForm(emptyForm); load();
+      let id = product?.id;
+      if(id) await sbUpdate("products",id,data);
+      else { const [np] = await sbInsert("products",data); id = np.id; }
+      onSaved(id);
     } catch(e) { alert("Gagal: "+e.message); }
     setSaving(false);
   };
-  const del = async(id) => { if(!confirm("Hapus produk ini?")) return; try { await sbDelete("products",id); load(); } catch(e) { alert("Gagal: "+e.message); } };
 
-  const marginPct = (()=>{
-    const jual = parseFloat(form.price)||0, beli = parseFloat(form.buy_price)||0;
-    if(jual<=0) return null;
-    return Math.round(((jual-beli)/jual)*1000)/10;
-  })();
+  const currentStock = liveProduct ? liveProduct.stock : (product?.stock||0);
+  const currentBuyPrice = liveProduct ? liveProduct.buy_price : (product?.buy_price||0);
 
-  if(error) return <ErrBox msg={error} onRetry={load}/>;
-  return <>
-    {unitProduct && <UnitModal product={unitProduct} onClose={()=>setUnitProduct(null)} onSaved={load}/>}
-    {variantProduct && <VariantModal product={variantProduct} onClose={()=>setVariantProduct(null)} onSaved={load}/>}
-    {showScanner && <BarcodeScanner onDetected={(code)=>{setForm(p=>({...p,barcode:code}));setShowScanner(false);}} onClose={()=>setShowScanner(false)}/>}
-    <div style={{padding:16,maxWidth:900,margin:"0 auto"}}>
-    <div style={{display:"flex",gap:10,marginBottom:16}}>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari produk..."
-        style={{flex:1,padding:"10px 14px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,outline:"none"}}/>
-      <button onClick={()=>{setEditId(null);setForm(emptyForm);setShowForm(v=>!v);}}
-        style={{padding:"10px 16px",background:G,color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer"}}>+ Tambah</button>
-    </div>
-    {showForm&&<div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
-      <h4 style={{margin:"0 0 12px",fontSize:15}}>{editId?"✏️ Edit Produk":"➕ Tambah Produk"}</h4>
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto',paddingBottom:100}}>
+      {showScanner && <BarcodeScanner onDetected={(code)=>{setForm(p=>({...p,barcode:code}));setShowScanner(false);}} onClose={()=>setShowScanner(false)}/>}
+      {showManStok && product && (
+        <ManStokModal product={liveProduct||product} onClose={()=>setShowManStok(false)}
+          onSaved={async()=>{
+            const r = await sbGet('products',{eq:{id:product.id}});
+            if(r?.[0]) { setLiveProduct(r[0]); setForm(p=>({...p, buy_price:r[0].buy_price})); }
+            setShowManStok(false);
+          }}/>
+      )}
+
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+        <button onClick={onBack} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:22,padding:0}}>←</button>
+        <div style={{fontWeight:800,fontSize:16}}>{isNew?'➕ Tambah Barang':'✏️ Edit Barang'}</div>
+      </div>
+
+      {/* Foto */}
+      <div style={{textAlign:'center',marginBottom:16}}>
+        <div style={{width:96,height:96,borderRadius:16,background:'#F5F6FA',margin:'0 auto 8px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:36,overflow:'hidden',border:'1.5px dashed #ddd'}}>
+          {uploadingPhoto ? '⏳' : form.foto_url ? <img src={form.foto_url} style={{width:'100%',height:'100%',objectFit:'cover'}}/> : '📦'}
+        </div>
+        <div style={{display:'flex',gap:8,justifyContent:'center'}}>
+          <label style={{padding:'7px 14px',background:GL,border:`1px solid ${G}`,borderRadius:8,color:GD,fontWeight:700,fontSize:12,cursor:'pointer'}}>
+            📷 Foto
+            <input type="file" accept="image/*" capture="environment" style={{display:'none'}} onChange={e=>e.target.files[0]&&uploadFoto(e.target.files[0])}/>
+          </label>
+          {form.foto_url&&(
+            <button onClick={()=>setForm(p=>({...p,foto_url:''}))} style={{padding:'7px 14px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,color:RD,fontWeight:700,fontSize:12,cursor:'pointer'}}>✕ Hapus</button>
+          )}
+        </div>
+      </div>
 
       <div style={{marginBottom:8}}>
         <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Nama Produk *</label>
         <input value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))} placeholder="Nama Produk *"
-          style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}
-          onFocus={e=>e.target.style.borderColor=G} onBlur={e=>e.target.style.borderColor='#eee'}/>
+          style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
       </div>
 
-      {/* Kode/Barcode dengan tombol scan */}
       <div style={{marginBottom:8}}>
         <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Kode / Barcode</label>
         <div style={{display:'flex',gap:6}}>
           <input value={form.barcode} onChange={e=>setForm(p=>({...p,barcode:e.target.value}))} placeholder="Scan atau ketik kode..."
             style={{flex:1,padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
-          <button type="button" onClick={()=>setShowScanner(true)}
-            style={{flexShrink:0,width:44,background:'#F5F6FA',border:'1.5px solid #eee',borderRadius:8,cursor:'pointer',fontSize:18}}>📷</button>
+          <button type="button" onClick={()=>setShowScanner(true)} style={{flexShrink:0,width:44,background:'#F5F6FA',border:'1.5px solid #eee',borderRadius:8,cursor:'pointer',fontSize:18}}>📷</button>
         </div>
       </div>
 
+      {/* Stok & Harga Dasar — terkunci, lewat Man. Stok */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
         <div>
-          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Beli (Rp)</label>
-          <input value={form.buy_price} onChange={e=>setForm(p=>({...p,buy_price:e.target.value}))} placeholder="Harga Beli (Rp)" type="number"
-            style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Stok</label>
+          <div style={{display:'flex',alignItems:'center',gap:6,padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,background:'#F5F6FA'}}>
+            <span style={{flex:1,fontWeight:700,fontSize:14,color:MT}}>{currentStock} {form.unit_kecil||'pcs'}</span>
+            {!isNew&&<button type="button" onClick={()=>setShowManStok(true)} style={{background:'none',border:'none',cursor:'pointer',fontSize:15}}>✏️</button>}
+          </div>
         </div>
         <div>
-          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Jual Eceran (Rp) *</label>
-          <input value={form.price} onChange={e=>setForm(p=>({...p,price:e.target.value}))} placeholder="Harga Jual (Rp) *" type="number"
-            style={{width:"100%",padding:"10px 12px",border:`1.5px solid ${G}`,borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Dasar (Rp)</label>
+          <div style={{display:'flex',alignItems:'center',gap:6,padding:'10px 12px',border:'1.5px solid #eee',borderRadius:8,background:'#F5F6FA'}}>
+            <span style={{flex:1,fontWeight:700,fontSize:14,color:MT}}>{fmt(currentBuyPrice)}</span>
+            {!isNew&&<button type="button" onClick={()=>setShowManStok(true)} style={{background:'none',border:'none',cursor:'pointer',fontSize:15}}>✏️</button>}
+          </div>
         </div>
       </div>
-      {marginPct!==null&&(
-        <div style={{fontSize:11,color:marginPct>=0?GD:RD,fontWeight:700,marginBottom:8,marginTop:-4}}>
-          📈 Margin Keuntungan: {marginPct}%
+      {isNew&&(
+        <div style={{marginBottom:8}}>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Stok Awal</label>
+          <input value={form.stock} onChange={e=>setForm(p=>({...p,stock:e.target.value}))} type="number" placeholder="0"
+            style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+          <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',margin:'8px 0 3px'}}>Harga Beli Awal (Rp)</label>
+          <input value={form.buy_price} onChange={e=>setForm(p=>({...p,buy_price:e.target.value}))} type="number" placeholder="0"
+            style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
         </div>
       )}
+      <div style={{fontSize:10,color:MT,marginBottom:8,marginTop:-2}}>💡 Ubah stok/harga dasar lewat tombol ✏️ (Man. Stok) supaya riwayatnya tercatat rapi.</div>
 
-      {[["stock","Stok (unit kecil)","number"],["unit_kecil","Unit Kecil (meter/pcs/buah)","text"],["unit_besar","Unit Besar (roll/box/lusin)","text"],["konversi","Konversi (1 unit besar = ? unit kecil)","number"],["harga_besar","Harga Jual Unit Besar (Rp)","number"],["category","Kategori","text"]].map(([k,label,type])=>(
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>Harga Jual Eceran (Rp) *</label>
+        <input value={form.price} onChange={e=>setForm(p=>({...p,price:e.target.value}))} placeholder="Harga Jual (Rp) *" type="number"
+          style={{width:"100%",padding:"10px 12px",border:`1.5px solid ${G}`,borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+      </div>
+      {marginPct!==null&&(
+        <div style={{fontSize:11,color:marginPct>=0?GD:RD,fontWeight:700,marginBottom:8,marginTop:-4}}>📈 Margin Keuntungan: {marginPct}%</div>
+      )}
+
+      {[["unit_kecil","Unit Kecil (meter/pcs/buah)","text"],["unit_besar","Unit Besar (roll/box/lusin)","text"],["konversi","Konversi (1 unit besar = ? unit kecil)","number"],["harga_besar","Harga Jual Unit Besar (Rp)","number"],["category","Kategori","text"]].map(([k,label,type])=>(
         <div key={k} style={{marginBottom:8}}>
           <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
           <input value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} placeholder={label} type={type}
-            style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}
-            onFocus={e=>e.target.style.borderColor=G} onBlur={e=>e.target.style.borderColor='#eee'}/>
+            style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
         </div>
       ))}
 
@@ -3205,7 +3736,12 @@ function Manajemen() {
         <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>⚠️ Batas Minimum Stok</label>
         <input value={form.stok_minimum} onChange={e=>setForm(p=>({...p,stok_minimum:e.target.value}))} placeholder="0" type="number"
           style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
-        <div style={{fontSize:10,color:MT,marginTop:3}}>Nanti bisa dipakai buat peringatan stok menipis</div>
+      </div>
+
+      <div style={{marginBottom:8}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>⚖️ Berat (gram)</label>
+        <input value={form.berat} onChange={e=>setForm(p=>({...p,berat:e.target.value}))} placeholder="0" type="number"
+          style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
       </div>
 
       <div style={{marginBottom:8}}>
@@ -3250,6 +3786,7 @@ function Manajemen() {
           <div style={{fontSize:10,color:MT}}>Kalau dimatikan, produk bisa dijual tanpa cek & potong stok (jasa, barang curah, dll)</div>
         </div>
       </label>
+
       <div style={{marginBottom:8}}>
         <label style={{fontSize:12,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Tipe Barang</label>
         <select value={form.tipe_barang||'Default'} onChange={e=>setForm(p=>({...p,tipe_barang:e.target.value}))}
@@ -3260,66 +3797,26 @@ function Manajemen() {
           <option value="Add On">➕ Add On</option>
         </select>
       </div>
-      {/* Kalau Multi Satuan - tampilkan tombol kelola satuan */}
-      {(form.tipe_barang==='Multi Satuan'||form.tipe_barang==='Varian') && editId && (
+      {(form.tipe_barang==='Multi Satuan'||form.tipe_barang==='Varian') && product && (
         <div style={{background:form.tipe_barang==='Multi Satuan'?'#F3E5F5':'#E3F2FD',borderRadius:10,padding:'12px 14px',marginBottom:8,border:`1.5px solid ${form.tipe_barang==='Multi Satuan'?'#8E44AD':'#3498DB'}`}}>
           <div style={{fontSize:13,fontWeight:600,color:form.tipe_barang==='Multi Satuan'?'#7B1FA2':'#1976D2',marginBottom:8}}>
             {form.tipe_barang==='Multi Satuan'?'⚖️ Kelola Satuan & Harga':'🎨 Kelola Varian'}
           </div>
           <button type="button" onClick={()=>{
-              if(!editId){ alert('Simpan produk dulu sebelum kelola satuan!'); return; }
-              const prod = products.find(p=>p.id===editId);
-              if(form.tipe_barang==='Varian') {
-                setVariantProduct(prod); setShowForm(false);
-              } else {
-                setUnitProduct(prod); setShowForm(false);
-              }
+              if(form.tipe_barang==='Varian') onOpenVariant(product); else onOpenUnit(product);
             }}
             style={{width:'100%',padding:'9px 0',background:form.tipe_barang==='Multi Satuan'?'#8E44AD':'#3498DB',color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>
             {form.tipe_barang==='Multi Satuan'?'⚖️ Buka Kelola Satuan':'🎨 Buka Kelola Varian'}
           </button>
-          <div style={{fontSize:11,color:MT,marginTop:6,textAlign:'center'}}>
-            Simpan dulu perubahan di atas, lalu kelola {form.tipe_barang==='Multi Satuan'?'satuan':'varian'}-nya
-          </div>
         </div>
       )}
-      <div style={{display:"flex",gap:8}}>
-        <button onClick={save} disabled={saving} style={{flex:1,padding:10,background:saving?MT:G,color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer"}}>{saving?"Menyimpan...":"💾 Simpan"}</button>
-        <button onClick={()=>{setShowForm(false);setEditId(null);}} style={{flex:1,padding:10,background:"#eee",border:"none",borderRadius:8,cursor:"pointer"}}>Batal</button>
+
+      <div style={{display:"flex",gap:8,marginTop:16}}>
+        <button onClick={save} disabled={saving} style={{flex:1,padding:13,background:saving?MT:G,color:"#fff",border:"none",borderRadius:10,fontWeight:800,cursor:"pointer",fontSize:14}}>{saving?"Menyimpan...":"💾 Simpan"}</button>
+        <button onClick={onBack} style={{flex:1,padding:13,background:"#eee",border:"none",borderRadius:10,cursor:"pointer",fontWeight:700}}>Batal</button>
       </div>
-    </div>}
-    {loading?<Loading/>:(
-      <div style={{background:"#fff",borderRadius:12,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
-        {filtered.length===0&&<div style={{textAlign:"center",padding:"32px 0",color:MT}}>Belum ada produk. Tambah dulu!</div>}
-        {filtered.map((p,i)=>{
-          const lowStock = (p.stok_minimum||0)>0 && p.stock<=p.stok_minimum;
-          return (
-          <div key={p.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderBottom:i<filtered.length-1?"1px solid #f0f0f0":"none",background:p.tampilkan_transaksi===false?'#FAFAFA':'#fff'}}>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:600,fontSize:14,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                {p.name}
-                {p.tampilkan_transaksi===false&&<span style={{fontSize:9,fontWeight:700,color:MT,background:'#eee',borderRadius:5,padding:'1px 6px'}}>Disembunyikan</span>}
-                {lowStock&&<span style={{fontSize:9,fontWeight:700,color:RD,background:'#FFF0F0',borderRadius:5,padding:'1px 6px'}}>⚠️ Stok Menipis</span>}
-              </div>
-              {p.barcode&&<div style={{fontSize:11,color:MT,marginTop:1}}>{p.barcode}</div>}
-              <div style={{fontSize:12,color:MT,marginTop:1}}>{p.category||"—"}{p.letak_rak?` · 📍${p.letak_rak}`:''}</div>
-              {p.buy_price>0&&(
-                <div style={{display:'inline-block',fontSize:10,color:MT,background:'#F5F6FA',borderRadius:5,padding:'2px 7px',marginTop:4}}>
-                  Hrg Dasar {fmt(p.buy_price)}
-                </div>
-              )}
-            </div>
-            <div style={{textAlign:"right",marginRight:12,flexShrink:0}}><div style={{fontWeight:700,color:G}}>{fmt(p.price)}</div><div style={{fontSize:12,color:lowStock?RD:MT,fontWeight:lowStock?700:400}}>Stok: {p.stock}</div></div>
-            <div style={{display:"flex",gap:6,flexShrink:0}}>
-              <button onClick={()=>openEdit(p)} style={{padding:"6px 10px",background:GL,border:`1px solid ${G}`,borderRadius:6,cursor:"pointer",fontSize:13,color:GD}}>✏️</button>
-              <button onClick={()=>del(p.id)} style={{padding:"6px 10px",background:"#FFF0F0",border:`1px solid ${RD}`,borderRadius:6,cursor:"pointer",fontSize:13,color:RD}}>🗑️</button>
-            </div>
-          </div>
-        );})}
-      </div>
-    )}
-  </div>
-  </>;
+    </div>
+  );
 }
 
 // ── MANAJEMEN STOK ─────────────────────────────────────────────────────────
