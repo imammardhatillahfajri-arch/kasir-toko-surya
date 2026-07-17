@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-BARANGNAV";
+const APP_VERSION = "v14.07.2026-KASIRPLUS";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -2205,7 +2205,7 @@ const CAT_ICONS = {
   'Paku':       '📌',
 };
 
-function Transaksi() {
+function Transaksi({onGotoProduct}={}) {
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [search, setSearch] = useState('');
@@ -2286,6 +2286,15 @@ function Transaksi() {
   const [allUnits, setAllUnits] = useState({});
   const [showScanner, setShowScanner] = useState(false);
   const [showMobileCart, setShowMobileCart] = useState(false);
+  const [showTransaksiTambahan, setShowTransaksiTambahan] = useState(false);
+  const [showTambahProdukKasir, setShowTambahProdukKasir] = useState(false);
+  const longPressTimer = React.useRef(null);
+  const longPressFired = React.useRef(false);
+  const startLongPress = (fn) => {
+    longPressFired.current = false;
+    longPressTimer.current = setTimeout(()=>{ longPressFired.current = true; fn(); }, 550);
+  };
+  const cancelLongPress = () => { if(longPressTimer.current) clearTimeout(longPressTimer.current); };
 
   const filtered = products.filter(p=>{
     if(p.tampilkan_transaksi===false) return false;
@@ -2390,6 +2399,28 @@ function Transaksi() {
     <>
     {/* Barcode Scanner */}
     {showScanner && <BarcodeScanner onDetected={handleBarcode} onClose={()=>setShowScanner(false)}/>}
+    {showTransaksiTambahan && (
+      <TransaksiTambahanModal
+        onClose={()=>setShowTransaksiTambahan(false)}
+        onAdd={(item)=>{
+          setCart(prev=>[...prev, item]);
+          setShowTransaksiTambahan(false);
+        }}
+      />
+    )}
+    {showTambahProdukKasir && (
+      <TambahProdukBaruModal
+        initialName={search}
+        allProducts={window._cachedProducts||products||[]}
+        onClose={()=>setShowTambahProdukKasir(false)}
+        onCreated={(newProd)=>{
+          setProducts(prev=>[...prev, newProd].sort((a,b)=>a.name.localeCompare(b.name)));
+          setShowTambahProdukKasir(false);
+          setSearch('');
+          addToCart(newProd);
+        }}
+      />
+    )}
     {/* Unit Selector Modal */}
     {unitSelector && (
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:200,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setUnitSelector(null)}>
@@ -2503,6 +2534,11 @@ function Transaksi() {
               />
               {search&&<button onClick={()=>setSearch('')} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:16,color:'#aaa'}}>×</button>}
             </div>
+            <button onClick={()=>setShowTransaksiTambahan(true)}
+              title="Transaksi Tambahan"
+              style={{width:42,height:42,borderRadius:10,background:'#F5F6FA',border:'1.5px solid #eee',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:22,fontWeight:700,color:TX}}>
+              +
+            </button>
             <button onClick={()=>setShowScanner(true)}
               title="Scan Barcode"
               style={{width:42,height:42,borderRadius:10,background:G,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,boxShadow:'0 2px 8px rgba(46,204,113,0.3)',padding:6}}>
@@ -2623,7 +2659,16 @@ function Transaksi() {
         {/* Product List */}
         <div style={{flex:1,overflowY:'auto'}}>
           {loading?<Loading/>:filtered.length===0
-            ?<div style={{textAlign:'center',padding:'48px 0',color:MT}}><div style={{fontSize:36,marginBottom:10}}>🔍</div>Produk tidak ditemukan</div>
+            ?<div style={{textAlign:'center',padding:'48px 0',color:MT}}>
+                <div style={{fontSize:36,marginBottom:10}}>🔍</div>
+                <div style={{marginBottom:14}}>Produk tidak ditemukan</div>
+                {search&&(
+                  <button onClick={()=>setShowTambahProdukKasir(true)}
+                    style={{padding:'10px 20px',background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:700,fontSize:13,cursor:'pointer'}}>
+                    ➕ Tambah "{search}" sebagai Produk Baru
+                  </button>
+                )}
+              </div>
             :filtered.map((p,i)=>{
               const qty=getQty(p.id);
               const sub=(p.category||'').split(' > ')[1]||'';
@@ -2636,10 +2681,18 @@ function Transaksi() {
                     {CAT_ICONS[sub]||'📦'}
                   </div>
                   {/* Info — klik untuk tambah */}
-                  <div style={{flex:1,minWidth:0}} onClick={()=>{
+                  <div style={{flex:1,minWidth:0}}
+                    onClick={()=>{
+                      if(longPressFired.current){ longPressFired.current=false; return; }
                       if(p.stock<=0&&!bypassStok) return alert('Stok habis! Aktifkan bypass stok di panel kanan untuk tetap menjual.');
                       addToCart(p);
-                    }}>
+                    }}
+                    onMouseDown={()=>startLongPress(()=>onGotoProduct&&onGotoProduct(p.id))}
+                    onMouseUp={cancelLongPress}
+                    onMouseLeave={cancelLongPress}
+                    onTouchStart={()=>startLongPress(()=>onGotoProduct&&onGotoProduct(p.id))}
+                    onTouchEnd={cancelLongPress}
+                    onTouchMove={cancelLongPress}>
                     <div style={{fontSize:13,fontWeight:700,color:TX,lineHeight:1.3}}>{p.name}</div>
                     <div style={{fontSize:12,marginTop:2}}>
                       <span style={{color:MT}}>sisa {p.stock} · </span>
@@ -3072,7 +3125,7 @@ function UnitModal({product, onClose, onSaved}) {
 
 
 // ── MANAJEMEN ──────────────────────────────────────────────────────────────
-function Manajemen() {
+function Manajemen({initialProductId, onConsumeTarget}={}) {
   const [view, setView] = useState('list'); // list | detail | edit
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
@@ -3092,6 +3145,15 @@ function Manajemen() {
     setLoading(false);
   },[]);
   useEffect(()=>{load();},[load]);
+
+  // Deep-link dari halaman lain (mis. long-press produk di Kasir) → langsung buka Edit
+  useEffect(()=>{
+    if(initialProductId && products.length>0) {
+      const p = products.find(x=>x.id===initialProductId);
+      if(p) { setSelectedProduct(p); setView('edit'); }
+      onConsumeTarget&&onConsumeTarget();
+    }
+  },[initialProductId, products]);
 
   const stokHabisList   = products.filter(p=>p.pakai_stok!==false && (p.stock||0)<=0);
   const stokMenipisList = products.filter(p=>p.pakai_stok!==false && (p.stok_minimum||0)>0 && (p.stock||0)>0 && (p.stock||0)<=p.stok_minimum);
@@ -5595,8 +5657,10 @@ function ManajemenRetur() {
 }
 
 
-function ManajemenHub() {
+function ManajemenHub({targetProductId, onConsumeTarget}={}) {
   const [subPage, setSubPage] = useState('produk');
+
+  useEffect(()=>{ if(targetProductId) setSubPage('produk'); },[targetProductId]);
 
   const subMenus = [
     {id:'produk',    icon:'🗄️', label:'Produk'},
@@ -5619,7 +5683,7 @@ function ManajemenHub() {
         ))}
       </div>
       {/* Sub Page Content */}
-      {subPage==='produk'    && <Manajemen/>}
+      {subPage==='produk'    && <Manajemen initialProductId={targetProductId} onConsumeTarget={onConsumeTarget}/>}
       {subPage==='stok'      && <ManajemenStok/>}
       {subPage==='pelanggan' && <ManajemenPelanggan/>}
       {subPage==='supplier'  && <ManajemenSupplier/>}
@@ -9732,6 +9796,67 @@ function TambahProdukBaruModal({initialName='', initialHarga=0, allProducts=[], 
   );
 }
 
+// ── Modal Transaksi Tambahan: item ad-hoc, tidak masuk katalog produk permanen ─
+function TransaksiTambahanModal({onClose, onAdd}) {
+  const [nama, setNama] = React.useState('');
+  const [kode, setKode] = React.useState('');
+  const [hargaDasar, setHargaDasar] = React.useState('');
+  const [hargaJual, setHargaJual] = React.useState('');
+  const [qty, setQty] = React.useState(1);
+
+  const tambahkan = () => {
+    if(!nama.trim()) return alert('Isi nama barang/jasa dulu!');
+    const harga = parseInt(hargaJual)||0;
+    if(harga<=0) return alert('Isi harga jual dulu!');
+    onAdd({
+      id: null,
+      cartKey: 'adhoc-'+Date.now(),
+      name: nama.trim(),
+      barcode: kode.trim()||null,
+      buy_price: parseInt(hargaDasar)||0,
+      price: harga,
+      qty: qty,
+      unit: 'pcs',
+      stock: 999999,
+      pakai_stok: false,
+      _adhoc: true,
+    });
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2200,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,width:'100%',maxWidth:400,boxShadow:'0 8px 30px rgba(0,0,0,0.3)',overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:'1px solid #eee',textAlign:'center',fontWeight:800,fontSize:16}}>
+          TRANSAKSI TAMBAHAN
+        </div>
+        <div style={{padding:20}}>
+          <input value={nama} onChange={e=>setNama(e.target.value)} placeholder="Barang atau jasa" autoFocus
+            style={{width:'100%',padding:'11px 14px',border:`1.5px solid ${G}`,borderRadius:10,fontSize:14,boxSizing:'border-box',marginBottom:10}}/>
+          <input value={kode} onChange={e=>setKode(e.target.value)} placeholder="Kode (opsional)"
+            style={{width:'100%',padding:'11px 14px',border:`1.5px solid ${G}`,borderRadius:10,fontSize:14,boxSizing:'border-box',marginBottom:10}}/>
+          <input value={hargaDasar} onChange={e=>setHargaDasar(e.target.value.replace(/[^0-9]/g,''))} placeholder="Harga dasar (opsional)" inputMode="numeric"
+            style={{width:'100%',padding:'11px 14px',border:`1.5px solid ${G}`,borderRadius:10,fontSize:14,boxSizing:'border-box',marginBottom:10}}/>
+          <input value={hargaJual} onChange={e=>setHargaJual(e.target.value.replace(/[^0-9]/g,''))} placeholder="Harga jual *" inputMode="numeric"
+            style={{width:'100%',padding:'11px 14px',border:`1.5px solid ${G}`,borderRadius:10,fontSize:14,boxSizing:'border-box',marginBottom:16}}/>
+
+          <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:28,marginBottom:6}}>
+            <button onClick={()=>setQty(q=>Math.max(1,q-1))}
+              style={{width:44,height:44,borderRadius:12,background:'#F5F6FA',border:'none',fontSize:24,fontWeight:700,cursor:'pointer',color:TX}}>−</button>
+            <span style={{fontWeight:800,fontSize:22,minWidth:30,textAlign:'center'}}>{qty}</span>
+            <button onClick={()=>setQty(q=>q+1)}
+              style={{width:44,height:44,borderRadius:12,background:'#F5F6FA',border:'none',fontSize:24,fontWeight:700,cursor:'pointer',color:TX}}>+</button>
+          </div>
+        </div>
+        <div style={{display:'flex',borderTop:'1px solid #eee'}}>
+          <button onClick={onClose} style={{flex:1,padding:16,background:'#fff',border:'none',borderRight:'1px solid #eee',color:G,fontWeight:700,fontSize:14,cursor:'pointer'}}>BATAL</button>
+          <button onClick={tambahkan} style={{flex:1,padding:16,background:'#fff',border:'none',color:G,fontWeight:700,fontSize:14,cursor:'pointer'}}>OK</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProductSearchInput({products, value, onSelect, placeholder='Cari nama produk...'}) {
   const [q, setQ]           = React.useState('');
   const [open, setOpen]     = React.useState(false);
@@ -13318,6 +13443,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(()=>getSession());
   const [refreshKey, setRefreshKey]   = useState(0);
+  const [targetProductId, setTargetProductId] = useState(null);
 
   // Validasi sesi login: Supabase Auth adalah sumber kebenaran.
   // Kalau token auth tidak ada/kadaluarsa, profil lokal dianggap tidak sah.
@@ -13390,8 +13516,8 @@ function App() {
     }
     switch(page) {
       case "dashboard":  return <Dashboard onNavigate={setPage} currentUser={currentUser} refreshKey={refreshKey}/>;
-      case "transaksi":  return <Transaksi/>;
-      case "manajemen":  return isAdmin ? <ManajemenHub refreshKey={refreshKey}/> : null;
+      case "transaksi":  return <Transaksi onGotoProduct={(id)=>{setTargetProductId(id); setPage('manajemen');}}/>;
+      case "manajemen":  return isAdmin ? <ManajemenHub refreshKey={refreshKey} targetProductId={targetProductId} onConsumeTarget={()=>setTargetProductId(null)}/> : null;
       case "keuangan":   return isAdmin ? <Keuangan refreshKey={refreshKey}/> : null;
       case "laporan":    return <Laporan/>;
       case "absensi":    return <Absensi/>;
