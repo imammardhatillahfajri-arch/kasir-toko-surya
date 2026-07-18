@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-BULKTIPE";
+const APP_VERSION = "v14.07.2026-PRIORITASFREKUENSI";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3408,6 +3408,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
 function CekKonversiTool({onBack}) {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState([]);
+  const [freqMap, setFreqMap] = useState({}); // product_id -> jumlah kemunculan di transaksi+pembelian
   const [activeGroup, setActiveGroup] = useState(null); // nama unit_besar yang lagi dipilih
   const [editingId, setEditingId] = useState(null);
   const [editKecil, setEditKecil] = useState('');
@@ -3417,7 +3418,18 @@ function CekKonversiTool({onBack}) {
 
   const load = useCallback(async()=>{
     setLoading(true);
-    try { setProducts(await sbGetAll('products',{order:'name'})); }
+    try {
+      setProducts(await sbGetAll('products',{order:'name'}));
+      // Hitung frekuensi pemakaian dari transaksi & pembelian terakhir, buat prioritasin produk yang paling berdampak
+      const [txItems, poItems] = await Promise.all([
+        sbGet('transaction_items',{order:'id',asc:false,limit:3000}).catch(()=>[]),
+        sbGet('po_items',{order:'id',asc:false,limit:2000}).catch(()=>[]),
+      ]);
+      const fm = {};
+      (txItems||[]).forEach(it=>{ if(it.product_id) fm[it.product_id]=(fm[it.product_id]||0)+1; });
+      (poItems||[]).forEach(it=>{ if(it.product_id) fm[it.product_id]=(fm[it.product_id]||0)+1; });
+      setFreqMap(fm);
+    }
     catch(e){ setProducts([]); }
     setLoading(false);
   },[]);
@@ -3437,9 +3449,13 @@ function CekKonversiTool({onBack}) {
   const listInGroup = multiUnit
     .filter(p=>p.unit_besar.trim()===activeGroup)
     .sort((a,b)=>{
-      // Yang satuannya sama (bermasalah) naik ke atas duluan, baru diurut konversi
+      // 1. Yang satuannya sama (bermasalah) naik ke atas duluan
       const aBad = sameSatuan(a)?0:1, bBad = sameSatuan(b)?0:1;
       if(aBad!==bBad) return aBad-bBad;
+      // 2. Di dalam kelompok yang sama, prioritaskan yang paling sering ditransaksiin/dibeli (dampak lebih besar)
+      const aFreq = freqMap[a.id]||0, bFreq = freqMap[b.id]||0;
+      if(aFreq!==bFreq) return bFreq-aFreq;
+      // 3. Terakhir baru urut konversi
       return (a.konversi||0)-(b.konversi||0);
     });
 
@@ -3499,7 +3515,7 @@ function CekKonversiTool({onBack}) {
     <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
       <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
       <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🔍 Cek Konversi Satuan</h2>
-      <div style={{fontSize:12,color:MT,marginBottom:16}}>Konversi wajar beda-beda per produk (roll kabel A bisa 50m, roll kabel B bisa 100m) — ini bukan alat penyeragaman, tapi buat bantu nemuin data yang kemungkinan salah input.</div>
+      <div style={{fontSize:12,color:MT,marginBottom:16}}>Konversi wajar beda-beda per produk (roll kabel A bisa 50m, roll kabel B bisa 100m) — ini bukan alat penyeragaman, tapi buat bantu nemuin data yang kemungkinan salah input. Urutan produk diprioritaskan: bermasalah dulu 🔴, lalu yang paling sering ditransaksiin 🔥 — biar waktu lo kepakai buat yang paling berdampak.</div>
 
       {loading ? <Loading/> : groupCounts.length===0 ? (
         <div style={{textAlign:'center',color:MT,fontSize:13,padding:24,background:'#fff',borderRadius:12}}>Belum ada produk dengan unit besar (multi-satuan).</div>
@@ -3534,7 +3550,12 @@ function CekKonversiTool({onBack}) {
                 <div key={p.id} style={{padding:'11px 14px',borderBottom:i<listInGroup.length-1?'1px solid #f0f0f0':'none',background:bermasalah?'#FFF0F0':outlier?'#FFF3D6':'#fff'}}>
                   <div style={{display:'flex',alignItems:'center',gap:10}}>
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                      <div style={{display:'flex',alignItems:'center',gap:6}}>
+                        <div style={{fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{p.name}</div>
+                        {(freqMap[p.id]||0)>0&&(
+                          <span style={{flexShrink:0,fontSize:9,fontWeight:700,color:'#1976D2',background:'#E3F2FD',borderRadius:5,padding:'1px 6px'}}>🔥{freqMap[p.id]}x</span>
+                        )}
+                      </div>
                       {!isEditing&&(
                         <div style={{fontSize:11,color:bermasalah?RD:MT,marginTop:1,fontWeight:bermasalah?700:400}}>
                           1 {p.unit_besar} = {p.konversi||1} {p.unit_kecil||'pcs'} {bermasalah&&'⚠️ satuan sama!'}
