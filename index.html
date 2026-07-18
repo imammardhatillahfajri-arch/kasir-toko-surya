@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-BULKSATUAN";
+const APP_VERSION = "v14.07.2026-BULKTIPE";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3174,6 +3174,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [showBulkSatuan, setShowBulkSatuan] = useState(false);
+  const [showBulkTipe, setShowBulkTipe] = useState(false);
 
   const load = useCallback(async()=>{
     setLoading(true); setError(null);
@@ -3356,16 +3357,22 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
         </div>
       )}
       {bulkMode&&selectedIds.size>0&&(
-        <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,display:'flex',gap:8,alignItems:'center'}}>
-          <span style={{fontSize:13,fontWeight:700,flexShrink:0}}>{selectedIds.size} dipilih</span>
-          <button onClick={()=>setShowBulkEdit(true)}
-            style={{flex:1,padding:'11px 0',background:'#3498DB',color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13}}>
-            ✏️ Ubah Harga
-          </button>
-          <button onClick={()=>setShowBulkSatuan(true)}
-            style={{flex:1,padding:'11px 0',background:'#8E44AD',color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13}}>
-            📏 Ubah Satuan
-          </button>
+        <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'10px 14px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:8,textAlign:'center'}}>{selectedIds.size} produk dipilih</div>
+          <div style={{display:'flex',gap:6}}>
+            <button onClick={()=>setShowBulkEdit(true)}
+              style={{flex:1,padding:'10px 0',background:'#3498DB',color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:11}}>
+              ✏️ Harga
+            </button>
+            <button onClick={()=>setShowBulkSatuan(true)}
+              style={{flex:1,padding:'10px 0',background:'#8E44AD',color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:11}}>
+              📏 Satuan
+            </button>
+            <button onClick={()=>setShowBulkTipe(true)}
+              style={{flex:1,padding:'10px 0',background:OR,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:11}}>
+              📦 Tipe Produk
+            </button>
+          </div>
         </div>
       )}
       {showBulkEdit&&(
@@ -3380,6 +3387,13 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
           products={products.filter(p=>selectedIds.has(p.id))}
           onClose={()=>setShowBulkSatuan(false)}
           onDone={()=>{ setShowBulkSatuan(false); setBulkMode(false); setSelectedIds(new Set()); load(); }}
+        />
+      )}
+      {showBulkTipe&&(
+        <BulkEditTipeModal
+          products={products.filter(p=>selectedIds.has(p.id))}
+          onClose={()=>setShowBulkTipe(false)}
+          onDone={()=>{ setShowBulkTipe(false); setBulkMode(false); setSelectedIds(new Set()); load(); }}
         />
       )}
     </div>
@@ -3711,6 +3725,72 @@ function RapikanSatuanTool({onBack}) {
 }
 
 // ── Modal Ubah Satuan Massal — terapkan Unit Kecil/Besar ke banyak produk sekaligus ─
+// ── Modal Ubah Tipe Produk Massal ───────────────────────────────────────────
+function BulkEditTipeModal({products, onClose, onDone}) {
+  const [tipe, setTipe] = useState('Default');
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const tipeOptions = [
+    {val:'Default', label:'📦 Default'},
+    {val:'Multi Satuan', label:'⚖️ Multi Satuan'},
+    {val:'Varian', label:'🎨 Varian'},
+    {val:'Add On', label:'➕ Add On'},
+  ];
+
+  const terapkan = async() => {
+    if(!confirm(`Yakin ubah Tipe Produk ${products.length} produk sekaligus jadi "${tipe}"?`)) return;
+    setSaving(true);
+    try {
+      for(let i=0;i<products.length;i++){
+        await sbUpdate('products', products[i].id, {tipe_barang: tipe});
+        setProgress(i+1);
+      }
+      alert(`✅ Berhasil ubah tipe produk ${products.length} produk!`);
+      onDone();
+    } catch(e){ alert(`Gagal di tengah proses: ${e.message}\n(${progress}/${products.length} berhasil sebelum error)`); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2200,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget && !saving)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:420,maxHeight:'88vh',overflowY:'auto'}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:4}}>📦 Ubah Tipe Produk Massal</div>
+        <div style={{fontSize:12,color:MT,marginBottom:14}}>{products.length} produk dipilih</div>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:6}}>Ganti Semua Jadi:</label>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
+          {tipeOptions.map(t=>(
+            <button key={t.val} onClick={()=>setTipe(t.val)}
+              style={{padding:'11px 6px',background:tipe===t.val?OR:'#F5F6FA',color:tipe===t.val?'#fff':TX,border:'none',borderRadius:9,fontWeight:700,cursor:'pointer',fontSize:13}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {(tipe==='Multi Satuan'||tipe==='Varian')&&(
+          <div style={{fontSize:11,color:MT,background:'#F5F6FA',borderRadius:8,padding:10,marginBottom:14}}>
+            💡 Setelah ini, buka tiap produk satu-satu buat "Kelola {tipe==='Multi Satuan'?'Satuan':'Varian'}" — perubahan tipe massal ini gak otomatis bikinin data satuan/varian-nya, cuma ngubah label tipe barangnya.
+          </div>
+        )}
+
+        {saving&&(
+          <div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:10}}>⏳ Memproses {progress}/{products.length}...</div>
+        )}
+
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={onClose} disabled={saving} style={{flex:1,padding:12,background:'#eee',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Batal</button>
+          <button onClick={terapkan} disabled={saving}
+            style={{flex:2,padding:12,background:saving?MT:OR,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer'}}>
+            {saving?'⏳ Menerapkan...':`💾 Terapkan ke ${products.length} Produk`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BulkEditSatuanModal({products, onClose, onDone}) {
   const [field, setField] = useState('unit_kecil'); // unit_kecil | unit_besar
   const [nilai, setNilai] = useState('');
