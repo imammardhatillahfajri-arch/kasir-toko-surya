@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-ZAKATHAUL";
+const APP_VERSION = "v14.07.2026-RETURPLUS";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -1451,7 +1451,6 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
   const [metode2,      setMetode2]      = useState('QRIS'); // metode kedua
 
   // ── Simpan Pesanan (hold transaksi) — keranjang bisa disimpan & dibuka lagi nanti ──
-  const [showAsistenAI, setShowAsistenAI] = useState(false);
   const [showPesanan,   setShowPesanan]   = useState(false);
   const [pesananList,   setPesananList]   = useState([]);
   const [pesananLoading,setPesananLoading]= useState(false);
@@ -1617,7 +1616,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
         // Update total stok
         await sbUpdate('products', pid, {stock: Math.max(0,(item.stock||0)-qtyOut)});
         // Log FIFO keluar
-        await sbInsert('stock_logs',[{product_id:pid,type:'keluar',qty:qtyOut,notes:'Penjualan FIFO'}]).catch(()=>{});
+        await sbInsert('stock_logs',[{product_id:pid,type:'keluar',qty:qtyOut,stock_before:item.stock||0,stock_after:Math.max(0,(item.stock||0)-qtyOut),notes:'Penjualan FIFO'}]).catch(()=>{});
       }));
 
       // ── Otomatis catat ke Hutang Piutang kalau statusnya Piutang ──
@@ -1713,7 +1712,6 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
         </div>
       </div>
     )}
-    {showAsistenAI && <AsistenKasirAI onClose={()=>{setShowAsistenAI(false); reload&&reload();}}/>}
     {showPesanan && (
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:1500,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
         onClick={e=>{if(e.target===e.currentTarget)setShowPesanan(false);}}>
@@ -1765,10 +1763,6 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
             {savingPesanan?'⏳':'💾'} Simpan Pesanan
           </button>
         </div>
-        <button onClick={()=>setShowAsistenAI(true)}
-          style={{width:'100%',marginTop:6,padding:'7px 0',background:'#F3E5F5',border:'1px solid #8E44AD',borderRadius:8,color:'#8E44AD',fontWeight:700,fontSize:12,cursor:'pointer'}}>
-          🤖 Asisten Kasir AI — Input dari Nota Manual
-        </button>
       </div>
 
       {/* Item List */}
@@ -2287,6 +2281,7 @@ function Transaksi({onGotoProduct}={}) {
   const [showScanner, setShowScanner] = useState(false);
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [showTransaksiTambahan, setShowTransaksiTambahan] = useState(false);
+  const [showAsistenAI, setShowAsistenAI] = useState(false);
   const [showTambahProdukKasir, setShowTambahProdukKasir] = useState(false);
   const longPressTimer = React.useRef(null);
   const longPressFired = React.useRef(false);
@@ -2421,6 +2416,14 @@ function Transaksi({onGotoProduct}={}) {
         }}
       />
     )}
+    {showAsistenAI && <AsistenKasirAI onClose={()=>{
+      setShowAsistenAI(false);
+      sbGetAll('products',{order:'name'}).then(p=>{
+        const sorted=(p||[]).sort((a,b)=>a.name.localeCompare(b.name));
+        setProducts(sorted);
+        loadFavoritProducts(sorted);
+      }).catch(()=>{});
+    }}/>}
     {/* Unit Selector Modal */}
     {unitSelector && (
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:200,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setUnitSelector(null)}>
@@ -2574,6 +2577,11 @@ function Transaksi({onGotoProduct}={}) {
                 {listening?'🔴':'🎤'}
               </button>
             )}
+            <button onClick={()=>setShowAsistenAI(true)}
+              title="Asisten Kasir AI — Input dari Nota Manual"
+              style={{width:42,height:42,borderRadius:10,background:'#F3E5F5',border:'1.5px solid #8E44AD',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:19}}>
+              🤖
+            </button>
             {/* Bypass Stok Toggle */}
             <button onClick={()=>{
               if(!bypassStok){if(!confirm('⚠️ Aktifkan bypass stok?\nStok tidak akan dicek. Gunakan jika stok belum terupdate!')) return;}
@@ -3137,6 +3145,9 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
   const [showManStok, setShowManStok] = useState(false);
   const [unitProduct, setUnitProduct] = useState(null);
   const [variantProduct, setVariantProduct] = useState(null);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
 
   const load = useCallback(async()=>{
     setLoading(true); setError(null);
@@ -3238,19 +3249,44 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
           <button onClick={()=>setNotifFilter(null)} style={{background:'none',border:'none',color:'inherit',fontWeight:800,cursor:'pointer',fontSize:14}}>×</button>
         </div>
       )}
-      <button onClick={()=>{setSelectedProduct(null);setView('edit');}}
-        style={{width:'100%',padding:"11px 0",background:G,color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",marginBottom:14,fontSize:14}}>
-        + Tambah Barang
-      </button>
+      <div style={{display:'flex',gap:8,marginBottom:14}}>
+        <button onClick={()=>{setSelectedProduct(null);setView('edit');}}
+          style={{flex:1,padding:"11px 0",background:G,color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14}}>
+          + Tambah Barang
+        </button>
+        <button onClick={()=>{setBulkMode(v=>{ if(v) setSelectedIds(new Set()); return !v; });}}
+          style={{padding:"11px 16px",background:bulkMode?'#3498DB':'#F5F6FA',color:bulkMode?'#fff':TX,border:`1.5px solid ${bulkMode?'#3498DB':'#eee'}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,whiteSpace:'nowrap'}}>
+          {bulkMode?'✕ Batal':'☑️ Pilih Massal'}
+        </button>
+      </div>
+      {bulkMode&&(
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:10,padding:'9px 14px',marginBottom:12,fontSize:12}}>
+          <button onClick={()=>setSelectedIds(prev=>prev.size===filtered.length?new Set():new Set(filtered.map(p=>p.id)))}
+            style={{background:'none',border:'none',color:'#1976D2',fontWeight:700,cursor:'pointer',fontSize:12}}>
+            {selectedIds.size===filtered.length&&filtered.length>0?'☑️ Batalkan Semua':'☐ Pilih Semua'} ({filtered.length})
+          </button>
+          <span style={{fontWeight:700,color:'#1976D2'}}>{selectedIds.size} dipilih</span>
+        </div>
+      )}
       {loading?<Loading/>:(
         <div style={{background:"#fff",borderRadius:12,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.07)"}}>
           {filtered.length===0&&<div style={{textAlign:"center",padding:"32px 0",color:MT}}>Tidak ada barang ditemukan.</div>}
           {filtered.map((p,i)=>{
             const lowStock = (p.stok_minimum||0)>0 && p.stock>0 && p.stock<=p.stok_minimum;
             const habis = p.pakai_stok!==false && (p.stock||0)<=0;
+            const checked = selectedIds.has(p.id);
+            const toggleSelect = () => setSelectedIds(prev=>{
+              const next = new Set(prev);
+              if(next.has(p.id)) next.delete(p.id); else next.add(p.id);
+              return next;
+            });
             return (
-              <div key={p.id} onClick={()=>{setSelectedProduct(p);setView('detail');}}
-                style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:i<filtered.length-1?"1px solid #f0f0f0":"none",cursor:'pointer',background:p.tampilkan_transaksi===false?'#FAFAFA':'#fff'}}>
+              <div key={p.id} onClick={()=>{ bulkMode ? toggleSelect() : (setSelectedProduct(p),setView('detail')); }}
+                style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:i<filtered.length-1?"1px solid #f0f0f0":"none",cursor:'pointer',background:checked?'#E3F2FD':(p.tampilkan_transaksi===false?'#FAFAFA':'#fff')}}>
+                {bulkMode&&(
+                  <input type="checkbox" checked={checked} onChange={toggleSelect} onClick={e=>e.stopPropagation()}
+                    style={{width:20,height:20,accentColor:'#3498DB',flexShrink:0}}/>
+                )}
                 <div style={{width:44,height:44,borderRadius:10,background:'#F5F6FA',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,overflow:'hidden'}}>
                   {p.foto_url ? <img src={p.foto_url} style={{width:'100%',height:'100%',objectFit:'cover'}}/> : (CAT_ICONS[(p.category||'').split(' > ')[1]]||'📦')}
                 </div>
@@ -3277,12 +3313,125 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
           })}
         </div>
       )}
+      {bulkMode&&selectedIds.size>0&&(
+        <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,display:'flex',gap:10,alignItems:'center'}}>
+          <span style={{fontSize:13,fontWeight:700,flexShrink:0}}>{selectedIds.size} dipilih</span>
+          <button onClick={()=>setShowBulkEdit(true)}
+            style={{flex:1,padding:'11px 0',background:'#3498DB',color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:14}}>
+            ✏️ Ubah Harga Massal
+          </button>
+        </div>
+      )}
+      {showBulkEdit&&(
+        <BulkEditHargaModal
+          products={products.filter(p=>selectedIds.has(p.id))}
+          onClose={()=>setShowBulkEdit(false)}
+          onDone={()=>{ setShowBulkEdit(false); setBulkMode(false); setSelectedIds(new Set()); load(); }}
+        />
+      )}
     </div>
   </>;
 }
 
 
 // ── Modal Notifikasi Ringkasan Stok ─────────────────────────────────────────
+// ── Modal Ubah Harga Massal — terapkan perubahan harga ke banyak produk sekaligus ─
+function BulkEditHargaModal({products, onClose, onDone}) {
+  const [mode, setMode] = useState('set'); // set | naik_persen | turun_persen | naik_rp | turun_rp
+  const [nilai, setNilai] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const hitungHargaBaru = (hargaLama) => {
+    const v = parseFloat(nilai)||0;
+    switch(mode) {
+      case 'set': return v;
+      case 'naik_persen': return Math.round(hargaLama*(1+v/100));
+      case 'turun_persen': return Math.round(hargaLama*(1-v/100));
+      case 'naik_rp': return hargaLama+v;
+      case 'turun_rp': return Math.max(0, hargaLama-v);
+      default: return hargaLama;
+    }
+  };
+
+  const modeOptions = [
+    {key:'set', label:'Set Harga Tetap'},
+    {key:'naik_persen', label:'Naikkan %'},
+    {key:'turun_persen', label:'Turunkan %'},
+    {key:'naik_rp', label:'Naikkan Rp'},
+    {key:'turun_rp', label:'Turunkan Rp'},
+  ];
+
+  const preview = products.slice(0,4);
+
+  const terapkan = async() => {
+    if(!nilai||parseFloat(nilai)<0) return alert('Isi nilai perubahan dulu!');
+    if(!confirm(`Yakin ubah harga jual ${products.length} produk sekaligus? Aksi ini tidak bisa di-undo otomatis.`)) return;
+    setSaving(true);
+    try {
+      for(let i=0;i<products.length;i++) {
+        const p = products[i];
+        const newPrice = Math.max(0, hitungHargaBaru(p.price||0));
+        await sbUpdate('products', p.id, {price: newPrice});
+        setProgress(i+1);
+      }
+      alert(`✅ Berhasil ubah harga ${products.length} produk!`);
+      onDone();
+    } catch(e){ alert('Gagal di tengah proses: '+e.message+`\n(${progress}/${products.length} berhasil diubah sebelum error)`); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2200,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget && !saving)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:420,maxHeight:'88vh',overflowY:'auto'}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:4}}>✏️ Ubah Harga Massal</div>
+        <div style={{fontSize:12,color:MT,marginBottom:14}}>{products.length} produk dipilih</div>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:6}}>Jenis Perubahan</label>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:12}}>
+          {modeOptions.map(m=>(
+            <button key={m.key} onClick={()=>setMode(m.key)}
+              style={{padding:'9px 6px',background:mode===m.key?'#3498DB':'#F5F6FA',color:mode===m.key?'#fff':TX,border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:12}}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>
+          {mode==='set'?'Harga Baru (Rp)':mode.includes('persen')?'Persentase (%)':'Nominal (Rp)'}
+        </label>
+        <input value={nilai} onChange={e=>setNilai(e.target.value.replace(/[^0-9.]/g,''))} placeholder="0" inputMode="decimal"
+          style={{width:'100%',padding:'11px 14px',border:'1.5px solid #3498DB',borderRadius:8,fontSize:16,fontWeight:700,boxSizing:'border-box',marginBottom:14}}/>
+
+        {nilai&&(
+          <div style={{background:'#F5F6FA',borderRadius:10,padding:'10px 12px',marginBottom:14}}>
+            <div style={{fontSize:11,fontWeight:700,color:MT,marginBottom:6}}>Preview (contoh {preview.length} dari {products.length}):</div>
+            {preview.map(p=>(
+              <div key={p.id} style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:3}}>
+                <span style={{color:MT,maxWidth:'55%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</span>
+                <span><span style={{textDecoration:'line-through',color:'#bbb'}}>{fmt(p.price)}</span> → <b style={{color:GD}}>{fmt(Math.max(0,hitungHargaBaru(p.price||0)))}</b></span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {saving&&(
+          <div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:10}}>⏳ Memproses {progress}/{products.length}...</div>
+        )}
+
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={onClose} disabled={saving} style={{flex:1,padding:12,background:'#eee',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer'}}>Batal</button>
+          <button onClick={terapkan} disabled={saving}
+            style={{flex:2,padding:12,background:saving?MT:'#3498DB',color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer'}}>
+            {saving?'⏳ Menerapkan...':`💾 Terapkan ke ${products.length} Produk`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NotifStokModal({stokHabis, stokMenipis, total, onFilter, onClose}) {
   const rows = [
     {key:'habis', icon:'🔴', label:'Stok Habis', value:stokHabis, color:RD},
@@ -3387,7 +3536,7 @@ function ManStokModal({product, onClose, onSaved}) {
           buy_price: parseInt(hargaDasar)||product.buy_price||0,
           tanggal_masuk: tanggal,
         }]);
-        await sbInsert('stock_logs',[{product_id:product.id, type:'masuk', qty, notes:keterangan||'Penyesuaian stok manual'}]);
+        await sbInsert('stock_logs',[{product_id:product.id, type:'masuk', qty, stock_before:product.stock||0, stock_after:(product.stock||0)+qty, notes:keterangan||'Penyesuaian stok manual'}]);
       } else {
         await stokKeluar(product.id, qty, keterangan||'Penyesuaian stok manual (kurangi)');
       }
@@ -3884,165 +4033,235 @@ function EditBarangView({product, onBack, onSaved, onOpenUnit, onOpenVariant}) {
 // ── MANAJEMEN STOK ─────────────────────────────────────────────────────────
 function ManajemenStok() {
   const [products, setProducts] = useState([]);
-  const [logs, setLogs] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({product_id:'', type:'masuk', qty:'', notes:''});
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [showNotif, setShowNotif] = useState(false);
+  const [notifFilter, setNotifFilter] = useState(null);
+  const [aksiProduct, setAksiProduct] = useState(null);
+  const [showManStok, setShowManStok] = useState(false);
+  const [showLogBarang, setShowLogBarang] = useState(null);
+  const [showStokDetail, setShowStokDetail] = useState(null);
 
   const load = useCallback(async() => {
     setLoading(true); setError(null);
-    try {
-      const [prods, lg] = await Promise.all([
-        sbGetAll('products', {order:'name'}),
-        sbGet('stock_logs', {order:'created_at', asc:false, limit:50}),
-      ]);
-      setProducts(prods); setLogs(lg);
-    } catch(e) { setError(e.message); }
+    try { setProducts(await sbGetAll('products', {order:'name'})); }
+    catch(e) { setError(e.message); }
     setLoading(false);
   }, []);
   useEffect(()=>{load();},[load]);
 
-  const filtered = products.filter(p => smartMatch(search, p.name, p.category||''));
+  const stokHabisList   = products.filter(p=>p.pakai_stok!==false && (p.stock||0)<=0);
+  const stokMenipisList = products.filter(p=>p.pakai_stok!==false && (p.stok_minimum||0)>0 && (p.stock||0)>0 && (p.stock||0)<=p.stok_minimum);
 
-  const saveLog = async() => {
-    if(!form.product_id || !form.qty) return alert('Pilih produk & isi qty!');
-    setSaving(true);
-    try {
-      const product = products.find(p => p.id === parseInt(form.product_id));
-      const qty = parseInt(form.qty);
-      const stockBefore = product.stock;
-      const stockAfter = form.type === 'masuk' || form.type === 'retur'
-        ? stockBefore + qty
-        : form.type === 'opname' ? qty
-        : Math.max(0, stockBefore - qty);
+  let baseList = products;
+  if(notifFilter==='habis') baseList = stokHabisList;
+  else if(notifFilter==='menipis') baseList = stokMenipisList;
+  const filtered = baseList.filter(p => smartMatch(search, p.name, p.category||''));
 
-      await sbInsert('stock_logs', [{
-        product_id: product.id,
-        type: form.type,
-        qty,
-        stock_before: stockBefore,
-        stock_after: stockAfter,
-        notes: form.notes,
-      }]);
-      await sbUpdate('products', product.id, {stock: stockAfter});
-      setForm({product_id:'', type:'masuk', qty:'', notes:''});
-      setShowForm(false);
-      await load();
-    } catch(e) { alert('Gagal: ' + e.message); }
-    setSaving(false);
+  const refreshAksi = async(id) => {
+    await load();
+    const r = await sbGet('products',{eq:{id}});
+    if(r?.[0]) setAksiProduct(r[0]);
   };
-
-  const typeColor = {masuk:G, keluar:RD, opname:'#3498DB', retur:OR};
-  const typeIcon  = {masuk:'📥', keluar:'📤', opname:'📋', retur:'🔄'};
 
   if(error) return <ErrBox msg={error} onRetry={load}/>;
 
+  if(showLogBarang) return <LogBarangView product={showLogBarang} onBack={()=>setShowLogBarang(null)}/>;
+  if(showStokDetail) return <DetailSisaStokView product={showStokDetail} onBack={()=>setShowStokDetail(null)} onRefresh={()=>{}}/>;
+
   return (
     <div style={{padding:16, maxWidth:900, margin:'0 auto'}}>
-      <div style={{display:'flex', gap:10, marginBottom:16}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari produk..."
-          style={{flex:1, padding:'10px 14px', border:'1.5px solid #eee', borderRadius:8, fontSize:14, outline:'none'}}/>
-        <button onClick={()=>setShowForm(v=>!v)}
-          style={{padding:'10px 16px', background:G, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer'}}>
-          + Catat Stok
+      {showNotif && (
+        <NotifStokModal stokHabis={stokHabisList.length} stokMenipis={stokMenipisList.length} total={products.length}
+          onFilter={(f)=>{setNotifFilter(f);setShowNotif(false);}} onClose={()=>setShowNotif(false)}/>
+      )}
+      {aksiProduct && !showManStok && (
+        <AksiStokModal product={aksiProduct} onClose={()=>setAksiProduct(null)}
+          onTambahKurang={()=>setShowManStok(true)}
+          onEditLihat={()=>{setShowStokDetail(aksiProduct);setAksiProduct(null);}}
+          onLogBarang={()=>{setShowLogBarang(aksiProduct);setAksiProduct(null);}}/>
+      )}
+      {showManStok && aksiProduct && (
+        <ManStokModal product={aksiProduct} onClose={()=>setShowManStok(false)}
+          onSaved={async()=>{ await refreshAksi(aksiProduct.id); setShowManStok(false); }}/>
+      )}
+
+      <div style={{display:'flex', gap:10, marginBottom:16, alignItems:'center'}}>
+        <button onClick={()=>setShowNotif(true)}
+          style={{position:'relative',flexShrink:0,background:'#F5F6FA',border:'1.5px solid #eee',borderRadius:10,width:44,height:44,cursor:'pointer',fontSize:19}}>
+          🔔
+          {(stokHabisList.length+stokMenipisList.length)>0&&(
+            <span style={{position:'absolute',top:5,right:6,width:9,height:9,borderRadius:'50%',background:RD,border:'2px solid #fff'}}/>
+          )}
         </button>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari nama atau kode barang"
+          style={{flex:1, padding:'10px 14px', border:'1.5px solid #eee', borderRadius:8, fontSize:14, outline:'none'}}/>
       </div>
 
-      {showForm && (
-        <div style={{background:'#fff', borderRadius:12, padding:16, marginBottom:16, boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
-          <h4 style={{margin:'0 0 14px', fontSize:15}}>📋 Catat Perubahan Stok</h4>
-          <div style={{marginBottom:10}}>
-            <label style={{fontSize:12, color:MT, fontWeight:600, display:'block', marginBottom:4}}>Jenis</label>
-            <div style={{display:'flex', gap:8}}>
-              {[['masuk','📥 Stok Masuk',G],['keluar','📤 Stok Keluar',RD],['opname','📋 Opname',`#3498DB`],['retur','🔄 Retur',OR]].map(([val,label,color])=>(
-                <button key={val} onClick={()=>setForm(f=>({...f,type:val}))}
-                  style={{flex:1, padding:'8px 4px', border:`2px solid ${form.type===val?color:'#eee'}`, borderRadius:8, background:form.type===val?color+'18':'#fff', color:form.type===val?color:MT, fontWeight:form.type===val?700:500, cursor:'pointer', fontSize:11}}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div style={{marginBottom:8}}>
-            <ProductSearchInput products={products} value={form.product_id}
-              placeholder="Cari nama produk..."
-              onSelect={p=>setForm(f=>({...f,product_id:p.id}))}/>
-          </div>
-          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8}}>
-            <input value={form.qty} onChange={e=>setForm(f=>({...f,qty:e.target.value}))}
-              placeholder={form.type==='opname'?'Stok aktual':'Jumlah'} type="number"
-              style={{padding:'10px 12px', border:'1.5px solid #eee', borderRadius:8, fontSize:14}}/>
-            <input value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}
-              placeholder="Keterangan (opsional)"
-              style={{padding:'10px 12px', border:'1.5px solid #eee', borderRadius:8, fontSize:14}}/>
-          </div>
-          {form.product_id && form.qty && (
-            <div style={{background:GL, borderRadius:8, padding:'10px 14px', marginBottom:10, fontSize:13}}>
-              {(() => {
-                const p = products.find(x=>x.id===parseInt(form.product_id));
-                if(!p) return null;
-                const qty = parseInt(form.qty||0);
-                const after = form.type==='masuk'||form.type==='retur' ? p.stock+qty : form.type==='opname' ? qty : Math.max(0,p.stock-qty);
-                return <span>Stok: <b>{p.stock}</b> → <b style={{color:G}}>{after}</b></span>;
-              })()}
-            </div>
-          )}
-          <div style={{display:'flex', gap:8}}>
-            <button onClick={saveLog} disabled={saving}
-              style={{flex:1, padding:10, background:saving?MT:G, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer'}}>
-              {saving?'Menyimpan...':'💾 Simpan'}
-            </button>
-            <button onClick={()=>setShowForm(false)} style={{flex:1, padding:10, background:'#eee', border:'none', borderRadius:8, cursor:'pointer'}}>Batal</button>
-          </div>
+      {notifFilter&&(
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:notifFilter==='habis'?'#FFF0F0':'#FFF3D6',border:`1.5px solid ${notifFilter==='habis'?RD:OR}`,borderRadius:10,padding:'9px 14px',marginBottom:12,fontSize:12,fontWeight:700,color:notifFilter==='habis'?RD:OR}}>
+          <span>Filter aktif: {notifFilter==='habis'?'🔴 Stok Habis':'🟠 Stok Menipis'} ({filtered.length})</span>
+          <button onClick={()=>setNotifFilter(null)} style={{background:'none',border:'none',color:'inherit',fontWeight:800,cursor:'pointer',fontSize:14}}>×</button>
         </div>
       )}
 
-      {/* Stok Menipis */}
-      <div style={{background:'#fff', borderRadius:12, padding:16, marginBottom:14, boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
-        <h4 style={{margin:'0 0 12px', fontSize:14, color:RD}}>⚠️ Stok Menipis ({'<'}20)</h4>
-        {loading ? <Loading/> : products.filter(p=>p.stock<20).length===0
-          ? <div style={{color:MT, fontSize:13}}>Semua stok aman ✅</div>
-          : products.filter(p=>p.stock<20).map((p,i)=>(
-            <div key={p.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid #f5f5f5'}}>
-              <span style={{fontSize:13, fontWeight:600}}>{p.name}</span>
-              <span style={{fontSize:13, fontWeight:800, color:p.stock===0?RD:OR}}>
-                {p.stock===0?'HABIS':p.stock+' pcs'}
-              </span>
-            </div>
-          ))
-        }
-      </div>
-
-      {/* Log Stok */}
-      <div style={{background:'#fff', borderRadius:12, padding:16, boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
-        <h4 style={{margin:'0 0 12px', fontSize:14}}>📜 Riwayat Perubahan Stok</h4>
-        {loading ? <Loading/> : logs.length===0
-          ? <div style={{textAlign:'center', padding:'24px 0', color:MT}}>Belum ada log stok</div>
-          : logs.map((log,i)=>(
-            <div key={log.id} style={{display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'1px solid #f5f5f5'}}>
-              <div style={{width:36, height:36, borderRadius:10, background:typeColor[log.type]+'18', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0}}>
-                {typeIcon[log.type]}
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:13, fontWeight:600}}>{products.find(p=>p.id===log.product_id)?.name||'Produk'}</div>
-                <div style={{fontSize:11, color:MT, marginTop:2}}>{log.notes||log.type} · {log.created_at?.slice(0,10)}</div>
-              </div>
-              <div style={{textAlign:'right'}}>
-                <div style={{fontSize:13, fontWeight:700, color:typeColor[log.type]}}>
-                  {log.type==='masuk'||log.type==='retur'?'+':log.type==='keluar'?'-':''}{log.qty}
+      {loading ? <Loading/> : (
+        <div style={{background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+          {filtered.length===0 && <div style={{textAlign:'center', padding:'32px 0', color:MT}}>Tidak ada barang ditemukan.</div>}
+          {filtered.map((p,i)=>{
+            const lowStock = (p.stok_minimum||0)>0 && p.stock>0 && p.stock<=p.stok_minimum;
+            const habis = p.pakai_stok!==false && (p.stock||0)<=0;
+            return (
+              <div key={p.id} onClick={()=>setAksiProduct(p)}
+                style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderBottom:i<filtered.length-1?'1px solid #f0f0f0':'none',cursor:'pointer'}}>
+                <div style={{width:44,height:44,borderRadius:10,background:'#F5F6FA',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,overflow:'hidden'}}>
+                  {p.foto_url ? <img src={p.foto_url} style={{width:'100%',height:'100%',objectFit:'cover'}}/> : (CAT_ICONS[(p.category||'').split(' > ')[1]]||'📦')}
                 </div>
-                <div style={{fontSize:11, color:MT}}>{log.stock_before} → {log.stock_after}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                    {p.name}
+                    {habis&&<span style={{fontSize:9,fontWeight:700,color:RD,background:'#FFF0F0',borderRadius:5,padding:'1px 6px'}}>Stok Habis</span>}
+                    {!habis&&lowStock&&<span style={{fontSize:9,fontWeight:700,color:OR,background:'#FFF3D6',borderRadius:5,padding:'1px 6px'}}>Stok Menipis</span>}
+                  </div>
+                  {p.barcode&&<div style={{fontSize:11,color:MT,marginTop:1}}>{p.barcode}</div>}
+                  {p.buy_price>0&&(
+                    <div style={{display:'inline-block',fontSize:10,color:MT,background:'#F5F6FA',borderRadius:5,padding:'2px 7px',marginTop:4}}>
+                      Hrg Beli Terakhir {fmt(p.buy_price)}
+                    </div>
+                  )}
+                </div>
+                <div style={{textAlign:'right',flexShrink:0}}>
+                  <div style={{fontWeight:800,fontSize:15,color:habis?RD:lowStock?OR:G}}>{p.stock}</div>
+                  <div style={{fontSize:12,color:MT}}>{fmt(p.price)}</div>
+                </div>
               </div>
-            </div>
-          ))
-        }
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Modal Aksi: 3 pilihan cepat per barang (Tambah/Kurang, Edit/Lihat, Log) ─
+function AksiStokModal({product, onClose, onTambahKurang, onEditLihat, onLogBarang}) {
+  const p = product;
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'#fff',borderRadius:16,padding:20,width:'100%',maxWidth:380,boxShadow:'0 8px 30px rgba(0,0,0,0.3)'}}>
+        <div style={{textAlign:'center',fontWeight:800,fontSize:16,marginBottom:14}}>AKSI</div>
+        <div style={{display:'flex',alignItems:'center',gap:10,background:'#F5F6FA',borderRadius:10,padding:'10px 12px',marginBottom:16}}>
+          <div style={{width:40,height:40,borderRadius:8,background:'#fff',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,overflow:'hidden'}}>
+            {p.foto_url ? <img src={p.foto_url} style={{width:'100%',height:'100%',objectFit:'cover'}}/> : '📦'}
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:13}}>{p.name}</div>
+            <div style={{fontSize:11,color:MT}}>{p.barcode||'-'}</div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontWeight:700,fontSize:13}}>{fmt(p.price)}</div>
+            <div style={{fontSize:11,color:MT}}>{p.stock}</div>
+          </div>
+        </div>
+        {[
+          ['📊','Tambah / Kurang Stok', onTambahKurang],
+          ['✏️','Edit / Lihat Stok', onEditLihat],
+          ['📜','Log Barang', onLogBarang],
+        ].map(([icon,label,fn])=>(
+          <button key={label} onClick={fn}
+            style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'13px 14px',background:'#fff',border:'1.5px solid '+G,borderRadius:12,marginBottom:8,cursor:'pointer',textAlign:'left',fontWeight:600,fontSize:13,color:TX}}>
+            <span style={{fontSize:16}}>{icon}</span><span style={{flex:1}}>{label}</span><span style={{color:G}}>›</span>
+          </button>
+        ))}
+        <button onClick={onClose} style={{width:'100%',padding:13,background:G,color:'#fff',border:'none',borderRadius:12,fontWeight:800,cursor:'pointer',marginTop:6}}>OK</button>
       </div>
     </div>
   );
 }
 
+// ── Halaman Log Barang: riwayat masuk/keluar stok per produk ────────────────
+function LogBarangView({product, onBack}) {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const todayISO = new Date().toISOString().slice(0,10);
+  const twoMonthsAgo = (()=>{ const d=new Date(); d.setMonth(d.getMonth()-2); return d.toISOString().slice(0,10); })();
+  const [dari, setDari] = useState(twoMonthsAgo);
+  const [sampai, setSampai] = useState(todayISO);
+
+  const load = useCallback(async()=>{
+    setLoading(true);
+    try {
+      const l = await sbGetAll('stock_logs',{eq:{product_id:product.id},order:'created_at',asc:false});
+      setLogs((l||[]).filter(x=>{
+        const d = x.created_at?.slice(0,10);
+        return d && d>=dari && d<=sampai;
+      }));
+    } catch(e){ setLogs([]); }
+    setLoading(false);
+  },[product.id, dari, sampai]);
+  useEffect(()=>{load();},[load]);
+
+  const fmtTgl = (iso) => {
+    const d = new Date(iso+'T00:00:00');
+    return d.toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'});
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+        <button onClick={onBack} style={{background:'none',border:'none',cursor:'pointer',color:G,fontWeight:700,fontSize:22,padding:0}}>←</button>
+        <div style={{fontWeight:800,fontSize:16}}>Log Barang</div>
+      </div>
+      <div style={{background:'#F5F6FA',borderRadius:10,padding:'10px 14px',marginBottom:12}}>
+        <div style={{fontWeight:700,fontSize:13}}>{product.name}</div>
+        <div style={{fontSize:11,color:MT,marginTop:1}}>{product.barcode||'-'}</div>
+      </div>
+
+      <div style={{display:'flex',gap:8,marginBottom:14}}>
+        <input type="date" value={dari} onChange={e=>setDari(e.target.value)}
+          style={{flex:1,padding:'9px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+        <input type="date" value={sampai} onChange={e=>setSampai(e.target.value)}
+          style={{flex:1,padding:'9px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+      </div>
+
+      {loading ? <Loading/> : logs.length===0 ? (
+        <div style={{textAlign:'center',color:MT,fontSize:13,padding:32,background:'#fff',borderRadius:12}}>Tidak ada riwayat stok di rentang tanggal ini.</div>
+      ) : (
+        <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+          {logs.map((log,i)=>(
+            <div key={log.id} style={{display:'flex',alignItems:'center',padding:'12px 16px',borderBottom:i<logs.length-1?'1px solid #f5f5f5':'none'}}>
+              <div style={{flex:1.3}}>
+                <div style={{fontWeight:700,fontSize:13}}>{fmtTgl(log.created_at?.slice(0,10))}</div>
+                <div style={{fontSize:10,color:MT,marginTop:1}}>{log.created_at?.slice(11,19)}</div>
+                {log.notes&&<div style={{fontSize:10,color:MT,marginTop:1}}>{log.notes}</div>}
+              </div>
+              <div style={{flex:1,textAlign:'center'}}>
+                <div style={{fontSize:10,color:MT}}>Masuk</div>
+                <div style={{fontWeight:700,fontSize:14,color:log.type==='masuk'||log.type==='retur'?GD:'#ccc'}}>
+                  {log.type==='masuk'||log.type==='retur' ? log.qty : 0}
+                </div>
+              </div>
+              <div style={{flex:1,textAlign:'center'}}>
+                <div style={{fontSize:10,color:MT}}>Keluar</div>
+                <div style={{fontWeight:700,fontSize:14,color:log.type==='keluar'?RD:'#ccc'}}>
+                  {log.type==='keluar' ? log.qty : 0}
+                </div>
+              </div>
+              <div style={{flex:1,textAlign:'right'}}>
+                <div style={{fontSize:10,color:MT}}>Stok</div>
+                <div style={{fontWeight:800,fontSize:14}}>{log.stock_after??'-'}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── MANAJEMEN PELANGGAN
 // ── MANAJEMEN PELANGGAN ────────────────────────────────────────────────────
 function ManajemenPelanggan() {
   const [customers, setCustomers] = useState([]);
@@ -4242,6 +4461,68 @@ function genRefNo() {
 }
 
 // ── Cetak Invoice Pembelian PO (dipakai di detail PO & di Hutang Supplier) ──
+// ── Cetak Nota Retur (dari pelanggan atau ke supplier) ──────────────────────
+function printNotaRetur(retur, items) {
+  const tokoNama   = window.TOKO_NAMA||'SURYA LISTRIK';
+  const tokoAlamat = window.TOKO_ALAMAT||'';
+  const tokoTelp   = window.TOKO_TELP||'';
+  const isDariPelanggan = retur.type==='dari_pelanggan';
+  const pihak = isDariPelanggan ? (retur.customer||'Umum') : (retur.supplier||'Supplier');
+  const actionLabel = retur.action==='refund' ? '💵 Refund (Uang Kembali)' : '🔄 Tukar Barang';
+  const w = window.open('','_blank','width=800,height=600');
+
+  const itemRows = (items||[]).map((it,i)=>`
+    <tr>
+      <td>${i+1}</td><td>${it.product_name}</td>
+      <td style="text-align:center">${it.qty} ${it.satuan||'pcs'}</td>
+      <td style="text-align:right">Rp ${(it.price||0).toLocaleString('id-ID')}</td>
+      <td style="text-align:right">Rp ${((it.qty||0)*(it.price||0)).toLocaleString('id-ID')}</td>
+    </tr>`).join('');
+
+  w.document.write(`<!DOCTYPE html><html><head><title>Nota Retur ${retur.return_no}</title>
+  <style>
+    body{font-family:Arial,sans-serif;padding:24px;color:#222;max-width:600px;margin:0 auto}
+    .header{display:flex;justify-content:space-between;border-bottom:3px solid #8E44AD;padding-bottom:14px;margin-bottom:16px}
+    h1{color:#8E44AD;font-size:20px;margin:0}
+    table{width:100%;border-collapse:collapse;margin:12px 0}
+    th{background:#8E44AD;color:#fff;padding:8px 10px;text-align:left;font-size:12px}
+    td{padding:7px 10px;border-bottom:1px solid #eee;font-size:12px}
+    .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0;background:#F5F6FA;padding:12px;border-radius:8px}
+    .info-item label{font-size:10px;color:#777;display:block}
+    .info-item span{font-weight:600;font-size:12px}
+    @media print{body{padding:8px}button{display:none}}
+  </style></head><body>
+    <div class="header">
+      <div>
+        <h1>${tokoNama}</h1>
+        <div style="font-size:11px;color:#777;margin-top:3px">${tokoAlamat}</div>
+        <div style="font-size:11px;color:#777">Telp: ${tokoTelp}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:16px;font-weight:800;color:#8E44AD">NOTA RETUR</div>
+        <div style="font-size:12px;color:#777;margin-top:3px">No: ${retur.return_no}</div>
+        <div style="font-size:11px;color:#777">${isDariPelanggan?'Retur dari Pelanggan':'Retur ke Supplier'}</div>
+      </div>
+    </div>
+    <div class="info-grid">
+      <div class="info-item"><label>${isDariPelanggan?'Pelanggan':'Supplier'}</label><span>${pihak}</span></div>
+      <div class="info-item"><label>Tanggal</label><span>${retur.created_at?.slice(0,10)||'-'}</span></div>
+      <div class="info-item"><label>Alasan</label><span>${retur.reason||'-'}</span></div>
+      <div class="info-item"><label>Proses</label><span>${actionLabel}</span></div>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>Nama Barang</th><th style="text-align:center">Qty</th><th style="text-align:right">Harga</th><th style="text-align:right">Subtotal</th></tr></thead>
+      <tbody>${itemRows}
+        <tr style="font-weight:800"><td colspan="4" style="text-align:right">TOTAL</td><td style="text-align:right">Rp ${(retur.total||0).toLocaleString('id-ID')}</td></tr>
+      </tbody>
+    </table>
+    ${retur.notes?`<div style="font-size:11px;color:#777;margin-top:10px">Catatan: ${retur.notes}</div>`:''}
+    <div style="text-align:center;margin-top:20px;color:#777;font-size:11px">Dokumen ini adalah bukti sah retur barang.</div>
+    <div style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:10px 28px;background:#8E44AD;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Nota Retur</button></div>
+  </body></html>`);
+  w.document.close();
+}
+
 function printInvoicePO(po) {
   const tokoNama = window.TOKO_NAMA||'SURYA LISTRIK';
   const tokoAlamat = window.TOKO_ALAMAT||'';
@@ -5409,7 +5690,7 @@ function ManajemenRetur() {
         supplier: form.type==='ke_supplier'?(sup?.name||''):'',
         supplier_id: form.type==='ke_supplier'?parseInt(form.supplier_id)||null:null,
         reason: form.reason,
-        action: form.type==='dari_pelanggan'?form.action:'retur_supplier',
+        action: form.type==='dari_pelanggan'?form.action:(form.action||'tukar_barang'),
         total,
         notes: form.notes,
         status: 'Selesai',
@@ -5446,6 +5727,11 @@ function ManajemenRetur() {
             }
           }
         }
+      }
+
+      // Kalau retur ke supplier diproses sebagai refund (uang kembali), catat sebagai kas masuk
+      if(form.type==='ke_supplier' && (form.action||'tukar_barang')==='refund') {
+        await catatPembayaran({type:'masuk', amount:total, note:`Refund retur ke supplier ${retData.supplier} (${retData.return_no})`}).catch(()=>{});
       }
 
       setShowForm(false);
@@ -5549,13 +5835,23 @@ function ManajemenRetur() {
               </div>
             </div>
           ) : (
-            <div style={{marginBottom:12}}>
-              <label style={{fontSize:12,fontWeight:600,color:MT,display:'block',marginBottom:4}}>Supplier *</label>
-              <select value={form.supplier_id} onChange={e=>setForm(f=>({...f,supplier_id:e.target.value}))}
-                style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
-                <option value="">-- Pilih Supplier --</option>
-                {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+              <div>
+                <label style={{fontSize:12,fontWeight:600,color:MT,display:'block',marginBottom:4}}>Supplier *</label>
+                <select value={form.supplier_id} onChange={e=>setForm(f=>({...f,supplier_id:e.target.value}))}
+                  style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
+                  <option value="">-- Pilih Supplier --</option>
+                  {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:12,fontWeight:600,color:MT,display:'block',marginBottom:4}}>Proses Retur</label>
+                <select value={form.action||'tukar_barang'} onChange={e=>setForm(f=>({...f,action:e.target.value}))}
+                  style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,background:'#fff'}}>
+                  <option value="refund">💵 Refund (Uang kembali)</option>
+                  <option value="tukar_barang">🔄 Tukar Barang</option>
+                </select>
+              </div>
             </div>
           )}
 
@@ -5646,6 +5942,15 @@ function ManajemenRetur() {
                 <div style={{textAlign:'right'}}>
                   <div style={{fontWeight:800,fontSize:16,color:r.type==='dari_pelanggan'?'#E74C3C':'#8E44AD'}}>{fmt(r.total)}</div>
                   <div style={{fontSize:11,color:MT,marginTop:2}}>{r.created_at?.slice(0,10)}</div>
+                  <button onClick={async()=>{
+                      try {
+                        const items = await sbGet('return_items',{eq:{return_id:r.id},order:'id'});
+                        printNotaRetur(r, items||[]);
+                      } catch(e){ alert('Gagal ambil detail retur: '+e.message); }
+                    }}
+                    style={{marginTop:6,padding:'5px 10px',background:'#F5F6FA',border:'1px solid #eee',borderRadius:7,cursor:'pointer',fontSize:11,fontWeight:600,color:TX}}>
+                    🧾 Lihat Nota
+                  </button>
                 </div>
               </div>
             </div>
@@ -6315,6 +6620,15 @@ function ReturHistory({period}) {
                 <div style={{textAlign:'right'}}>
                   <div style={{fontWeight:800,fontSize:14,color:r.type==='dari_pelanggan'?RD:'#8E44AD'}}>{fmt(r.total)}</div>
                   <div style={{fontSize:10,fontWeight:600,color:r.action==='refund'?RD:G,marginTop:2}}>{r.action==='refund'?'💵 Refund':'🔄 Tukar'}</div>
+                  <button onClick={async()=>{
+                      try {
+                        const items = await sbGet('return_items',{eq:{return_id:r.id},order:'id'});
+                        printNotaRetur(r, items||[]);
+                      } catch(e){ alert('Gagal ambil detail retur: '+e.message); }
+                    }}
+                    style={{marginTop:5,padding:'4px 9px',background:'#fff',border:'1px solid #ddd',borderRadius:6,cursor:'pointer',fontSize:10,fontWeight:600,color:TX}}>
+                    🧾 Nota
+                  </button>
                 </div>
               </div>
             ))}
@@ -9813,10 +10127,25 @@ function AsistenKasirAI({onClose}) {
               </div>
             </div>
 
-            <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>📦 Barang ({extractedData.items.length})</div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{fontWeight:700,fontSize:13}}>📦 Barang ({extractedData.items.length})</div>
+              <button onClick={()=>setExtractedData(p=>({...p,items:[...p.items,{nama:'',qty:1,harga:0,satuan:'pcs',product_id:null}]}))}
+                style={{padding:'5px 12px',background:GL,border:`1px solid ${G}`,borderRadius:8,cursor:'pointer',color:GD,fontWeight:700,fontSize:12}}>
+                + Item
+              </button>
+            </div>
             {extractedData.items.map((item,i)=>(
               <div key={i} style={{background:item.product_id?'#F5F6FA':'#FFF8E1',borderRadius:10,padding:12,marginBottom:8,border:item.product_id?'1px solid transparent':`1.5px solid ${OR}`}}>
-                <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>{item.nama}</div>
+                <div style={{display:'flex',gap:6,marginBottom:6}}>
+                  <input value={item.nama}
+                    onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,nama:e.target.value,product_id:null,matched_name:null}:it)}))}
+                    placeholder="Nama barang"
+                    style={{flex:1,padding:'7px 10px',border:`1.5px solid ${item.product_id?G:'#eee'}`,borderRadius:8,fontSize:13,fontWeight:700,boxSizing:'border-box'}}/>
+                  {extractedData.items.length>1&&(
+                    <button onClick={()=>setExtractedData(p=>({...p,items:p.items.filter((_,j)=>j!==i)}))}
+                      style={{padding:'7px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,cursor:'pointer',color:RD,fontSize:12,flexShrink:0}}>🗑️</button>
+                  )}
+                </div>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8}}>
                   <div>
                     <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty</label>
@@ -10459,7 +10788,7 @@ async function stokMasuk(productId, qty, note) {
       await sbUpdate('stock_batches',b.id,{qty_sisa:(b.qty_sisa||0)+add}).catch(()=>{});
       left -= add;
     }
-    await sbInsert('stock_logs',[{product_id:productId,type:'masuk',qty,notes:note}]).catch(()=>{});
+    await sbInsert('stock_logs',[{product_id:productId,type:'masuk',qty,stock_before:prod.stock||0,stock_after:(prod.stock||0)+qty,notes:note}]).catch(()=>{});
   } catch(e){ console.warn('stokMasuk gagal:',e.message); }
 }
 
@@ -10478,7 +10807,7 @@ async function stokKeluar(productId, qty, note) {
       await sbUpdate('stock_batches',b.id,{qty_sisa:b.qty_sisa-ambil}).catch(()=>{});
       left -= ambil;
     }
-    await sbInsert('stock_logs',[{product_id:productId,type:'keluar',qty,notes:note}]).catch(()=>{});
+    await sbInsert('stock_logs',[{product_id:productId,type:'keluar',qty,stock_before:prod.stock||0,stock_after:Math.max(0,(prod.stock||0)-qty),notes:note}]).catch(()=>{});
   } catch(e){ console.warn('stokKeluar gagal:',e.message); }
 }
 
