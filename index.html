@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-CEKKONVERSI";
+const APP_VERSION = "v14.07.2026-KONVERSIFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -4073,9 +4073,9 @@ function EditBarangView({product, onBack, onSaved, onOpenUnit, onOpenVariant}) {
     try {
       const data={
         name:form.name, price:parseInt(form.price), buy_price:parseInt(form.buy_price)||0,
-        stock: liveProduct ? liveProduct.stock : (parseInt(form.stock)||0),
+        stock: liveProduct ? liveProduct.stock : (parseFloat(form.stock)||0),
         unit_kecil:form.unit_kecil||null, unit_besar:form.unit_besar||null,
-        konversi:parseInt(form.konversi)||1, harga_besar:parseInt(form.harga_besar)||0,
+        konversi:parseFloat(form.konversi)||1, harga_besar:parseInt(form.harga_besar)||0,
         category:form.category, tipe_barang:form.tipe_barang||"Default",
         pakai_stok: form.pakai_stok!==false,
         barcode: form.barcode||null,
@@ -5924,7 +5924,7 @@ function ManajemenRetur() {
     updateItem(i,'product_id',productId);
   };
 
-  const total = items.reduce((s,i)=>s+(parseInt(i.price)||0)*(parseInt(i.qty)||0),0);
+  const total = items.reduce((s,i)=>s+(parseInt(i.price)||0)*(parseFloat(i.qty)||0),0);
 
   const save = async() => {
     if(!form.customer&&form.type==='dari_pelanggan') return alert('Nama pelanggan wajib!');
@@ -5954,7 +5954,7 @@ function ManajemenRetur() {
           return_id: retId,
           product_id: parseInt(i.product_id)||null,
           product_name: i.product_name,
-          qty: parseInt(i.qty)||1,
+          qty: parseFloat(i.qty)||1,
           price: parseInt(i.price)||0,
           reason: i.reason,
         })));
@@ -5965,13 +5965,13 @@ function ManajemenRetur() {
             const prod = products.find(p=>p.id===parseInt(item.product_id));
             if(prod) {
               const newStok = form.type==='dari_pelanggan'
-                ? prod.stock + parseInt(item.qty)
-                : prod.stock - parseInt(item.qty);
+                ? prod.stock + parseFloat(item.qty)
+                : prod.stock - parseFloat(item.qty);
               await sbUpdate('products', parseInt(item.product_id), {stock: Math.max(0,newStok)});
               await sbInsert('stock_logs',[{
                 product_id: parseInt(item.product_id),
                 type: form.type==='dari_pelanggan'?'masuk':'keluar',
-                qty: parseInt(item.qty),
+                qty: parseFloat(item.qty),
                 notes: `Retur ${form.type==='dari_pelanggan'?'dari pelanggan':'ke supplier'}: ${form.reason}`,
               }]);
             }
@@ -9581,7 +9581,7 @@ function ScanNota({onBack, onDataReady}) {
       // Normalize
       parsed.items = (parsed.items||[]).map(item=>({
         nama:   (item.nama||'').toUpperCase(),
-        qty:    parseInt(item.qty)||1,
+        qty:    parseFloat(item.qty)||1,
         harga:  parseInt(item.harga)||0,
         satuan: (item.satuan||'pcs').toUpperCase(),
         product_id: null,
@@ -11348,7 +11348,7 @@ function EditPOView({po, onCancel, onSaved}) {
         const totalEdit = items.reduce((s,i)=>s+(i.qty*i.price),0);
         const totalLama = po.total||0;
         const itemsBerubah = JSON.stringify((po.items||[]).map(i=>({n:i.name,q:i.qty,p:i.price})))
-                          !== JSON.stringify(items.map(i=>({n:i.name,q:parseInt(i.qty)||0,p:parseInt(i.price)||0})));
+                          !== JSON.stringify(items.map(i=>({n:i.name,q:parseFloat(i.qty)||0,p:parseInt(i.price)||0})));
 
         // ── Riwayat revisi (hanya jika total/item berubah) ──
         let newRevs = Array.isArray(po.revisions)?po.revisions:[];
@@ -11360,7 +11360,7 @@ function EditPOView({po, onCancel, onSaved}) {
             totalLama,
             totalBaru: totalEdit,
             itemsLama: (po.items||[]).map(i=>({name:i.name,qty:i.qty,price:i.price||0,satuan:i.satuan||'pcs'})),
-            itemsBaru: items.map(i=>({name:i.name,qty:parseInt(i.qty)||0,price:parseInt(i.price)||0,satuan:i.satuan||'pcs'})),
+            itemsBaru: items.map(i=>({name:i.name,qty:parseFloat(i.qty)||0,price:parseInt(i.price)||0,satuan:i.satuan||'pcs'})),
           };
           const r = await appendPORevision(po, entry, {
             supplier:  editForm.supplier,
@@ -11388,9 +11388,9 @@ function EditPOView({po, onCancel, onSaved}) {
         await sbInsert('po_items', items.map(i=>({
           po_id: po.id,
           name: i.name,
-          qty: parseInt(i.qty)||1,
+          qty: parseFloat(i.qty)||1,
           price: parseInt(i.price)||0,
-          subtotal: (parseInt(i.qty)||1)*(parseInt(i.price)||0),
+          subtotal: (parseFloat(i.qty)||1)*(parseInt(i.price)||0),
           product_id: i.product_id||null,
           satuan: i.satuan||'pcs',
         })));
@@ -11502,7 +11502,7 @@ function EditPOView({po, onCancel, onSaved}) {
 
         {/* Notifikasi selisih pembayaran ke supplier */}
         {(()=>{
-          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
+          const totalBaru = items.reduce((s,i)=>s+(parseFloat(i.qty)||0)*(parseInt(i.price)||0),0);
           const totalLama = po.total||0;
           const selisih   = totalBaru - totalLama;
           if(selisih===0) return null;
@@ -11546,7 +11546,7 @@ function EditPOView({po, onCancel, onSaved}) {
 
         {/* Print Invoice Revisi PO */}
         {(()=>{
-          const totalBaru = items.reduce((s,i)=>s+(parseInt(i.qty)||0)*(parseInt(i.price)||0),0);
+          const totalBaru = items.reduce((s,i)=>s+(parseFloat(i.qty)||0)*(parseInt(i.price)||0),0);
           const totalLama = po.total||0;
           if(totalBaru===totalLama) return null;
           const selisih = totalBaru - totalLama;
@@ -11561,7 +11561,7 @@ function EditPOView({po, onCancel, onSaved}) {
                 (po.items||[]).map(i=>'<tr><td>'+i.name+'</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
                 '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #eee">Total Lama</td><td style="font-weight:800;border-top:2px solid #eee">Rp '+totalLama.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
                 '<div><div style="font-weight:700;font-size:11px;margin-bottom:6px;color:#1a472a">📋 PO BARU</div><table><thead><tr><th>Barang</th><th>Qty</th><th>Total</th></tr></thead><tbody>'+
-                items.map(i=>{ const isNew=!(po.items||[]).find(o=>o.name===i.name); return '<tr class="'+(isNew?'added':'')+'"><td>'+i.name+(isNew?' ✨':'')+'</td><td>'+i.qty+'</td><td>Rp '+((parseInt(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')+'</td></tr>'; }).join('')+
+                items.map(i=>{ const isNew=!(po.items||[]).find(o=>o.name===i.name); return '<tr class="'+(isNew?'added':'')+'"><td>'+i.name+(isNew?' ✨':'')+'</td><td>'+i.qty+'</td><td>Rp '+((parseFloat(i.qty)||0)*(parseInt(i.price)||0)).toLocaleString('id-ID')+'</td></tr>'; }).join('')+
                 (po.items||[]).filter(o=>!items.find(n=>n.name===o.name)).map(i=>'<tr class="removed"><td>'+i.name+' ❌</td><td>'+i.qty+'</td><td>Rp '+((i.qty||0)*(i.price||0)).toLocaleString('id-ID')+'</td></tr>').join('')+
                 '<tr><td colspan="2" style="font-weight:700;text-align:right;border-top:2px solid #1a472a">Total Baru</td><td style="font-weight:800;border-top:2px solid #1a472a;color:#1a472a">Rp '+totalBaru.toLocaleString('id-ID')+'</td></tr></tbody></table></div>'+
                 '</div>'+
@@ -11906,7 +11906,7 @@ function Pembelian() {
         const afterDiskonNota = itemSub - diskonNotaNom*proporsi;
         const afterPPN = afterDiskonNota * (1+ppnPersen/100);
         const totalEfektifItem = afterPPN - potonganRp*proporsi;
-        const qtyNota = parseInt(item.qty)||0;
+        const qtyNota = parseFloat(item.qty)||0;
         const newBuyPrice = qtyNota>0 ? Math.round(totalEfektifItem/qtyNota) : 0;
 
         // Cari by product_id dulu
@@ -11947,7 +11947,7 @@ function Pembelian() {
               if(hit&&(hit.ratio||1)>1) konversi = hit.ratio;
             } catch(e){}
           }
-          const qtyToAdd = (parseInt(item.qty)||0) * konversi;
+          const qtyToAdd = (parseFloat(item.qty)||0) * konversi;
 
           // Harga beli per unit kecil
           const newBuyPricePerUnit = newBuyPrice>0 ? Math.round(newBuyPrice/konversi) : (prod.buy_price||0);
