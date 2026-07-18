@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-RETURPLUS";
+const APP_VERSION = "v14.07.2026-SEARCHICON";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -2282,6 +2282,7 @@ function Transaksi({onGotoProduct}={}) {
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [showTransaksiTambahan, setShowTransaksiTambahan] = useState(false);
   const [showAsistenAI, setShowAsistenAI] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(false);
   const [showTambahProdukKasir, setShowTambahProdukKasir] = useState(false);
   const longPressTimer = React.useRef(null);
   const longPressFired = React.useRef(false);
@@ -2527,16 +2528,29 @@ function Transaksi({onGotoProduct}={}) {
         {/* Search */}
         <div style={{background:'#fff',padding:'10px 12px',borderBottom:'1px solid #eee',flexShrink:0}}>
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            <div style={{position:'relative',flex:1}}>
-              <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',fontSize:15,color:'#aaa'}}>🔍</span>
-              <input value={search} onChange={e=>setSearch(e.target.value)}
-                placeholder="Cari nama atau kode produk..."
-                style={{width:'100%',padding:'9px 32px 9px 32px',border:'1.5px solid #eee',borderRadius:10,fontSize:13,outline:'none',background:'#F5F6FA',boxSizing:'border-box'}}
-                onFocus={e=>{e.target.style.borderColor=G;e.target.style.background='#fff';}}
-                onBlur={e=>{e.target.style.borderColor='#eee';e.target.style.background='#F5F6FA';}}
-              />
-              {search&&<button onClick={()=>setSearch('')} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:16,color:'#aaa'}}>×</button>}
-            </div>
+            {searchExpanded ? (
+              <>
+                <div style={{position:'relative',flex:1}}>
+                  <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',fontSize:15,color:'#aaa'}}>🔍</span>
+                  <input value={search} onChange={e=>setSearch(e.target.value)}
+                    placeholder="Cari nama atau kode produk..." autoFocus
+                    style={{width:'100%',padding:'9px 32px 9px 32px',border:`1.5px solid ${G}`,borderRadius:10,fontSize:13,outline:'none',background:'#fff',boxSizing:'border-box'}}/>
+                  {search&&<button onClick={()=>setSearch('')} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:16,color:'#aaa'}}>×</button>}
+                </div>
+                <button onClick={()=>{setSearchExpanded(false);setSearch('');}}
+                  title="Tutup pencarian"
+                  style={{width:42,height:42,borderRadius:10,background:'#F5F6FA',border:'1.5px solid #eee',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:18,color:TX}}>
+                  ✕
+                </button>
+              </>
+            ) : (
+              <>
+                <button onClick={()=>setSearchExpanded(true)}
+                  title="Cari produk"
+                  style={{width:42,height:42,borderRadius:10,background:search?G:'#F5F6FA',border:`1.5px solid ${search?G:'#eee'}`,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:18,color:search?'#fff':TX,position:'relative'}}>
+                  🔍
+                  {search&&<span style={{position:'absolute',top:2,right:2,width:8,height:8,borderRadius:'50%',background:RD,border:'1.5px solid #fff'}}/>}
+                </button>
             <button onClick={()=>setShowTransaksiTambahan(true)}
               title="Transaksi Tambahan"
               style={{width:42,height:42,borderRadius:10,background:'#F5F6FA',border:'1.5px solid #eee',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:22,fontWeight:700,color:TX}}>
@@ -2569,7 +2583,7 @@ function Transaksi({onGotoProduct}={}) {
                   rec.onstart = ()=>setListening(true);
                   rec.onend = ()=>setListening(false);
                   rec.onerror = ()=>setListening(false);
-                  rec.onresult = (e)=>{ setSearch(e.results[0][0].transcript); };
+                  rec.onresult = (e)=>{ setSearch(e.results[0][0].transcript); setSearchExpanded(true); };
                   rec.start();
                 }}
                 title="Cari pakai suara"
@@ -2590,6 +2604,8 @@ function Transaksi({onGotoProduct}={}) {
               style={{width:42,height:42,borderRadius:10,background:bypassStok?OR:'#F5F6FA',border:`1.5px solid ${bypassStok?OR:'#eee'}`,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:16}}>
               {bypassStok?'🔓':'🔒'}
             </button>
+              </>
+            )}
           </div>
         </div>
 
