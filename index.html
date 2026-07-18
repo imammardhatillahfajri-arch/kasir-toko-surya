@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-SATUANTERKECIL";
+const APP_VERSION = "v14.07.2026-KELOLASATUANFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3213,13 +3213,17 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
 
   // ── VIEW: EDIT ──
   if(view==='edit') return (
-    <EditBarangView
-      product={selectedProduct}
-      onBack={()=>setView(selectedProduct?'detail':'list')}
-      onSaved={async(id)=>{ await load(); await refreshSelected(id); setView('detail'); }}
-      onOpenUnit={(p)=>setUnitProduct(p)}
-      onOpenVariant={(p)=>setVariantProduct(p)}
-    />
+    <>
+      {unitProduct && <UnitModal product={unitProduct} onClose={()=>setUnitProduct(null)} onSaved={load}/>}
+      {variantProduct && <VariantModal product={variantProduct} onClose={()=>setVariantProduct(null)} onSaved={load}/>}
+      <EditBarangView
+        product={selectedProduct}
+        onBack={()=>setView(selectedProduct?'detail':'list')}
+        onSaved={async(id)=>{ await load(); await refreshSelected(id); setView('detail'); }}
+        onOpenUnit={(p)=>setUnitProduct(p)}
+        onOpenVariant={(p)=>setVariantProduct(p)}
+      />
+    </>
   );
 
   // ── VIEW: DETAIL ──
@@ -4293,13 +4297,26 @@ function EditBarangView({product, onBack, onSaved, onOpenUnit, onOpenVariant}) {
         <div style={{fontSize:11,color:marginPct>=0?GD:RD,fontWeight:700,marginBottom:8,marginTop:-4}}>📈 Margin Keuntungan: {marginPct}%</div>
       )}
 
-      {[["unit_kecil","Unit Kecil (meter/pcs/buah)","text"],["unit_besar","Unit Besar (roll/box/lusin)","text"],["konversi","Konversi (1 unit besar = ? unit kecil)","number"],["harga_besar","Harga Jual Unit Besar (Rp)","number"],["category","Kategori","text"]].map(([k,label,type])=>(
+      {[["unit_kecil","Unit Kecil (meter/pcs/buah)","text"],["category","Kategori","text"]].map(([k,label,type])=>(
         <div key={k} style={{marginBottom:8}}>
           <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
           <input value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} placeholder={label} type={type}
             style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
         </div>
       ))}
+
+      {form.tipe_barang==='Multi Satuan'&&(
+        <div style={{background:'#F3E5F5',borderRadius:10,padding:'12px 14px',marginBottom:8,border:'1.5px solid #8E44AD33'}}>
+          <div style={{fontSize:11,fontWeight:700,color:'#7B1FA2',marginBottom:8}}>⚖️ Satuan Cepat (opsional — pelengkap "Kelola Satuan & Harga" di bawah)</div>
+          {[["unit_besar","Unit Besar (roll/box/lusin)","text"],["konversi","Konversi (1 unit besar = ? unit kecil)","number"],["harga_besar","Harga Jual Unit Besar (Rp)","number"]].map(([k,label,type])=>(
+            <div key={k} style={{marginBottom:8}}>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>{label}</label>
+              <input value={form[k]} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} placeholder={label} type={type}
+                style={{width:"100%",padding:"10px 12px",border:"1.5px solid #eee",borderRadius:8,fontSize:14,boxSizing:'border-box'}}/>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{marginBottom:8}}>
         <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:3}}>⚠️ Batas Minimum Stok</label>
