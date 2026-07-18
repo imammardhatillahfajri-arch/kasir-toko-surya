@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-SEARCHICON";
+const APP_VERSION = "v14.07.2026-CEKKONVERSI";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3234,6 +3234,8 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
   );
 
   if(view==='stockDetail' && selectedProduct) return <DetailSisaStokView product={selectedProduct} onBack={()=>setView('detail')} onRefresh={()=>refreshSelected(selectedProduct.id)}/>;
+  if(view==='rapikan') return <RapikanSatuanTool onBack={()=>{setView('list');load();}}/>;
+  if(view==='cekKonversi') return <CekKonversiTool onBack={()=>{setView('list');load();}}/>;
   if(view==='pelanggan' && selectedProduct)   return <PelangganBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
   if(view==='supplier' && selectedProduct)    return <SupplierBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
 
@@ -3273,6 +3275,16 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
         <button onClick={()=>{setBulkMode(v=>{ if(v) setSelectedIds(new Set()); return !v; });}}
           style={{padding:"11px 16px",background:bulkMode?'#3498DB':'#F5F6FA',color:bulkMode?'#fff':TX,border:`1.5px solid ${bulkMode?'#3498DB':'#eee'}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,whiteSpace:'nowrap'}}>
           {bulkMode?'✕ Batal':'☑️ Pilih Massal'}
+        </button>
+        <button onClick={()=>setView('rapikan')}
+          style={{padding:"11px 14px",background:'#F5F6FA',color:TX,border:'1.5px solid #eee',borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
+          title="Rapikan Satuan">
+          🧹
+        </button>
+        <button onClick={()=>setView('cekKonversi')}
+          style={{padding:"11px 14px",background:'#F5F6FA',color:TX,border:'1.5px solid #eee',borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
+          title="Cek Konversi Satuan">
+          🔍
         </button>
       </div>
       {bulkMode&&(
@@ -3352,6 +3364,228 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
 
 // ── Modal Notifikasi Ringkasan Stok ─────────────────────────────────────────
 // ── Modal Ubah Harga Massal — terapkan perubahan harga ke banyak produk sekaligus ─
+// ── Alat Rapikan Satuan — gabungkan variasi satuan (pcs/Pcs/PCS dll) massal ──
+// ── Alat Cek Konversi Satuan — audit angka konversi tiap produk multi-satuan ─
+function CekKonversiTool({onBack}) {
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState([]);
+  const [activeGroup, setActiveGroup] = useState(null); // nama unit_besar yang lagi dipilih
+  const [editingId, setEditingId] = useState(null);
+  const [editVal, setEditVal] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async()=>{
+    setLoading(true);
+    try { setProducts(await sbGetAll('products',{order:'name'})); }
+    catch(e){ setProducts([]); }
+    setLoading(false);
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  const multiUnit = products.filter(p=>(p.unit_besar||'').trim());
+
+  const groupCounts = React.useMemo(()=>{
+    const map = {};
+    multiUnit.forEach(p=>{ const k=p.unit_besar.trim(); map[k]=(map[k]||0)+1; });
+    return Object.entries(map).sort((a,b)=>b[1]-a[1]);
+  },[multiUnit]);
+
+  React.useEffect(()=>{ if(!activeGroup && groupCounts.length>0) setActiveGroup(groupCounts[0][0]); },[groupCounts]);
+
+  const listInGroup = multiUnit
+    .filter(p=>p.unit_besar.trim()===activeGroup)
+    .sort((a,b)=>(a.konversi||0)-(b.konversi||0));
+
+  // Deteksi outlier sederhana: konversi yang beda jauh dari median grup
+  const median = (()=>{
+    if(listInGroup.length===0) return 0;
+    const sorted = [...listInGroup].map(p=>p.konversi||0).sort((a,b)=>a-b);
+    return sorted[Math.floor(sorted.length/2)];
+  })();
+  const isOutlier = (k) => median>0 && (k > median*3 || (k>0 && k < median/3));
+
+  const simpanEdit = async(id) => {
+    const v = parseFloat(editVal)||0;
+    if(v<=0) return alert('Konversi harus lebih dari 0!');
+    setSaving(true);
+    try {
+      await sbUpdate('products', id, {konversi: v});
+      setProducts(prev=>prev.map(p=>p.id===id?{...p,konversi:v}:p));
+      setEditingId(null);
+    } catch(e){ alert('Gagal: '+e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🔍 Cek Konversi Satuan</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:16}}>Konversi wajar beda-beda per produk (roll kabel A bisa 50m, roll kabel B bisa 100m) — ini bukan alat penyeragaman, tapi buat bantu nemuin angka yang kemungkinan salah input.</div>
+
+      {loading ? <Loading/> : groupCounts.length===0 ? (
+        <div style={{textAlign:'center',color:MT,fontSize:13,padding:24,background:'#fff',borderRadius:12}}>Belum ada produk dengan unit besar (multi-satuan).</div>
+      ) : (
+        <>
+          <div style={{display:'flex',gap:6,overflowX:'auto',marginBottom:14,paddingBottom:2}}>
+            {groupCounts.map(([name,count])=>(
+              <button key={name} onClick={()=>setActiveGroup(name)}
+                style={{flexShrink:0,padding:'8px 14px',background:activeGroup===name?G:'#F5F6FA',color:activeGroup===name?'#fff':TX,border:'none',borderRadius:20,fontWeight:700,cursor:'pointer',fontSize:12,whiteSpace:'nowrap'}}>
+                {name} ({count})
+              </button>
+            ))}
+          </div>
+
+          {median>0&&(
+            <div style={{fontSize:11,color:MT,marginBottom:10}}>
+              Median konversi grup ini: <b>{median}</b>. Baris yang disorot 🟠 nilainya jauh beda dari median — worth dicek ulang.
+            </div>
+          )}
+
+          <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+            {listInGroup.map((p,i)=>{
+              const outlier = isOutlier(p.konversi||0);
+              return (
+                <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 14px',borderBottom:i<listInGroup.length-1?'1px solid #f0f0f0':'none',background:outlier?'#FFF3D6':'#fff'}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                    <div style={{fontSize:11,color:MT,marginTop:1}}>1 {p.unit_besar} = ? {p.unit_kecil||'pcs'}</div>
+                  </div>
+                  {editingId===p.id ? (
+                    <div style={{display:'flex',gap:4,alignItems:'center',flexShrink:0}}>
+                      <input value={editVal} onChange={e=>setEditVal(e.target.value.replace(/[^0-9.]/g,''))} autoFocus
+                        style={{width:64,padding:'6px 8px',border:`1.5px solid ${G}`,borderRadius:7,fontSize:13,fontWeight:700,textAlign:'center'}}/>
+                      <button onClick={()=>simpanEdit(p.id)} disabled={saving} style={{background:G,color:'#fff',border:'none',borderRadius:6,padding:'6px 9px',cursor:'pointer',fontSize:12}}>✓</button>
+                      <button onClick={()=>setEditingId(null)} style={{background:'#eee',border:'none',borderRadius:6,padding:'6px 9px',cursor:'pointer',fontSize:12}}>✕</button>
+                    </div>
+                  ) : (
+                    <button onClick={()=>{setEditingId(p.id);setEditVal(String(p.konversi||1));}}
+                      style={{flexShrink:0,display:'flex',alignItems:'center',gap:6,background:outlier?'#FFE4B5':'#F5F6FA',border:outlier?`1.5px solid ${OR}`:'1px solid #eee',borderRadius:8,padding:'7px 12px',cursor:'pointer'}}>
+                      {outlier&&<span>🟠</span>}
+                      <span style={{fontWeight:800,fontSize:14,color:outlier?OR:TX}}>{p.konversi||1}</span>
+                      <span style={{fontSize:11,color:MT}}>✏️</span>
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RapikanSatuanTool({onBack}) {
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState([]);
+  const [field, setField] = useState('unit_kecil'); // unit_kecil | unit_besar
+  const [selectedValues, setSelectedValues] = useState(new Set());
+  const [targetValue, setTargetValue] = useState('');
+  const [merging, setMerging] = useState(false);
+  const [progress, setProgress] = useState({done:0,total:0});
+
+  const load = useCallback(async()=>{
+    setLoading(true);
+    try { setProducts(await sbGetAll('products',{order:'name'})); }
+    catch(e){ setProducts([]); }
+    setLoading(false);
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  const groups = React.useMemo(()=>{
+    const map = {};
+    products.forEach(p=>{
+      const raw = (p[field]||'').trim();
+      const key = raw || '(kosong)';
+      map[key] = (map[key]||0)+1;
+    });
+    return Object.entries(map).sort((a,b)=>b[1]-a[1]);
+  },[products, field]);
+
+  const toggleSelect = (val) => { setSelectedValues(prev=>{
+    const next = new Set(prev);
+    if(next.has(val)) next.delete(val); else next.add(val);
+    return next;
+  }); };
+
+  const totalSelected = groups.filter(([val])=>selectedValues.has(val)).reduce((s,[,c])=>s+c,0);
+
+  const terapkanMerge = async() => {
+    if(selectedValues.size===0) return alert('Pilih minimal 1 variasi dulu!');
+    if(!targetValue.trim()) return alert('Isi nama satuan standar/tujuannya dulu!');
+    if(!confirm(`Gabungkan ${selectedValues.size} variasi (${totalSelected} produk) jadi "${targetValue.trim()}"?`)) return;
+    setMerging(true);
+    const affected = products.filter(p=>selectedValues.has((p[field]||'').trim()||'(kosong)'));
+    setProgress({done:0,total:affected.length});
+    try {
+      for(let i=0;i<affected.length;i++){
+        await sbUpdate('products', affected[i].id, {[field]: targetValue.trim()});
+        setProgress({done:i+1,total:affected.length});
+      }
+      alert(`✅ ${affected.length} produk berhasil dirapikan jadi "${targetValue.trim()}"!`);
+      setSelectedValues(new Set());
+      setTargetValue('');
+      await load();
+    } catch(e){ alert(`Gagal di tengah proses: ${e.message}\n(${progress.done}/${progress.total} berhasil sebelum error)`); }
+    setMerging(false);
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🧹 Rapikan Satuan</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:16}}>Pilih variasi satuan yang sebenarnya sama, lalu gabungkan jadi satu nama standar sekaligus ke semua produk terkait.</div>
+
+      <div style={{display:'flex',gap:8,marginBottom:14}}>
+        {[['unit_kecil','Satuan Kecil'],['unit_besar','Satuan Besar']].map(([val,label])=>(
+          <button key={val} onClick={()=>{setField(val);setSelectedValues(new Set());}}
+            style={{flex:1,padding:'9px 0',background:field===val?G:'#F5F6FA',color:field===val?'#fff':TX,border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? <Loading/> : (
+        <>
+          <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14,maxHeight:400,overflowY:'auto'}}>
+            {groups.length===0 && <div style={{textAlign:'center',padding:24,color:MT,fontSize:13}}>Tidak ada data.</div>}
+            {groups.map(([val,count],i)=>(
+              <label key={val} onClick={()=>toggleSelect(val)}
+                style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderBottom:i<groups.length-1?'1px solid #f0f0f0':'none',cursor:'pointer',background:selectedValues.has(val)?'#E3F2FD':'#fff'}}>
+                <input type="checkbox" checked={selectedValues.has(val)} onChange={()=>{}}
+                  style={{width:18,height:18,accentColor:'#3498DB',flexShrink:0}}/>
+                <span style={{flex:1,fontWeight:600,fontSize:14,color:val==='(kosong)'?MT:TX,fontStyle:val==='(kosong)'?'italic':'normal'}}>{val}</span>
+                <span style={{fontSize:12,color:MT,fontWeight:700}}>{count} produk</span>
+              </label>
+            ))}
+          </div>
+
+          {selectedValues.size>0&&(
+            <div style={{background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:12,padding:16,marginBottom:14}}>
+              <div style={{fontSize:12,fontWeight:700,color:'#1976D2',marginBottom:10}}>
+                {selectedValues.size} variasi dipilih ({totalSelected} produk total)
+              </div>
+              <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Ganti semua jadi:</label>
+              <input value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="mis. pcs"
+                style={{width:'100%',padding:'10px 12px',border:'1.5px solid #3498DB',borderRadius:8,fontSize:14,fontWeight:700,boxSizing:'border-box',marginBottom:10}}/>
+              {merging&&(
+                <div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:8}}>⏳ Memproses {progress.done}/{progress.total}...</div>
+              )}
+              <button onClick={terapkanMerge} disabled={merging}
+                style={{width:'100%',padding:12,background:merging?MT:'#3498DB',color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
+                {merging?'⏳ Menggabungkan...':`💾 Gabungkan ${totalSelected} Produk`}
+              </button>
+            </div>
+          )}
+          <div style={{fontSize:10,color:MT,textAlign:'center'}}>
+            💡 Ulangi proses ini untuk tiap kelompok variasi (mis. setelah gabung "Pcs/PCS" jadi "pcs", lanjut gabung "Buah/buah" jadi "pcs" juga kalau memang sama artinya).
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function BulkEditHargaModal({products, onClose, onDone}) {
   const [mode, setMode] = useState('set'); // set | naik_persen | turun_persen | naik_rp | turun_rp
   const [nilai, setNilai] = useState('');
