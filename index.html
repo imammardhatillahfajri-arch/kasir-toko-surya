@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PRINTVISFIX";
+const APP_VERSION = "v14.07.2026-AIMATCHFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -10304,7 +10304,7 @@ function ScanNota({onBack, onDataReady}) {
           <div key={i} style={{background:'#F5F6FA',borderRadius:10,padding:10,marginBottom:8}}>
             <div style={{display:'flex',gap:6,marginBottom:6}}>
               <input value={item.nama}
-                onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,nama:e.target.value,product_id:null,matched:false}:it)}))}
+                onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,nama:e.target.value,product_id:null,match_confidence:null,matched_name:null}:it)}))}
                 placeholder="Nama barang"
                 style={{flex:1,padding:'7px 10px',border:`1.5px solid ${item.product_id?G:'#eee'}`,borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
               <button onClick={()=>setExtractedData(p=>({...p,items:p.items.filter((_,j)=>j!==i)}))}
@@ -10328,7 +10328,7 @@ function ScanNota({onBack, onDataReady}) {
                   if(!val) return;
                   const prod = (window._cachedProducts||[]).find(p=>p.id===parseInt(val));
                   // Harga beli TETAP dari nota, tidak diganti dari database
-                  if(prod) setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:prod.id,nama:prod.name}:it)}));
+                  if(prod) setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:prod.id,nama:prod.name,match_confidence:null,matched_name:null}:it)}));
                 }}
                   style={{width:'100%',padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,background:'#fff',marginBottom:4}}>
                   <option value="">-- Pilih produk yang cocok --</option>
@@ -10353,7 +10353,7 @@ function ScanNota({onBack, onDataReady}) {
             ) : (
               <div style={{marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center',background:GL,borderRadius:8,padding:'5px 10px'}}>
                 <div style={{fontSize:11,color:GD,fontWeight:600}}>✅ Cocok dengan produk di database</div>
-                <button onClick={()=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:null}:it)}))}
+                <button onClick={()=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,product_id:null,match_confidence:null,matched_name:null}:it)}))}
                   style={{fontSize:10,color:MT,background:'none',border:'none',cursor:'pointer'}}>Batalkan</button>
               </div>
             )}
