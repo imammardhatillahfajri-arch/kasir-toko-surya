@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-HAPUSBYPASS";
+const APP_VERSION = "v14.07.2026-DUPIDFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -841,8 +841,8 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   };
 
   // ── THERMAL ───────────────────────────────────────────────────────────────
-  const ThermalContent = ()=>(
-    <div id="struk-thermal" style={{fontFamily:"'Courier New',monospace",fontSize:10,lineHeight:1.5,color:'#000',background:'#fff',padding:'8px 10px',width:220}}>
+  const ThermalContent = ({idOverride}={})=>(
+    <div id={idOverride||"struk-thermal"} style={{fontFamily:"'Courier New',monospace",fontSize:10,lineHeight:1.5,color:'#000',background:'#fff',padding:'8px 10px',width:220}}>
       <div style={{textAlign:'center',borderBottom:'1px dashed #999',paddingBottom:6,marginBottom:6}}>
         <div style={{fontWeight:700,fontSize:13}}>{tokoNama}</div>
         <div style={{fontSize:9,color:'#555'}}>{tokoTagline}</div>
@@ -881,8 +881,8 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   );
 
   // ── A4 LANDSCAPE ──────────────────────────────────────────────────────────
-  const A4Content = ()=>(
-    <div id="struk-a4" style={{fontFamily:"'Segoe UI',Arial,sans-serif",fontSize:11,color:'#000',background:'#fff',padding:16}}>
+  const A4Content = ({idOverride}={})=>(
+    <div id={idOverride||"struk-a4"} style={{fontFamily:"'Segoe UI',Arial,sans-serif",fontSize:11,color:'#000',background:'#fff',padding:16}}>
       {/* Header */}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',borderBottom:'3px solid #1a472a',paddingBottom:10,marginBottom:12}}>
         <div style={{display:'flex',alignItems:'center',gap:12}}>
@@ -1025,11 +1025,11 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
       <div style={{flex:1,overflowY:'auto',padding:20,width:'100%',display:'flex',justifyContent:'center'}} onClick={e=>e.stopPropagation()}>
         {previewMode==='thermal' ? (
           <div style={{background:'#fff',borderRadius:8,padding:16,boxShadow:'0 4px 20px rgba(0,0,0,0.2)',width:240}}>
-            <ThermalContent/>
+            <ThermalContent idOverride="struk-thermal-preview"/>
           </div>
         ) : (
           <div style={{background:'#fff',borderRadius:8,padding:20,boxShadow:'0 4px 20px rgba(0,0,0,0.2)',width:'100%',maxWidth:900,minHeight:400}}>
-            <A4Content/>
+            <A4Content idOverride="struk-a4-preview"/>
           </div>
         )}
       </div>
