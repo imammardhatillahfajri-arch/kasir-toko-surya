@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-BERSIHDUPLIKAT";
+const APP_VERSION = "v14.07.2026-TOMBOLKETUTUP";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3363,7 +3363,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
         </div>
       )}
       {bulkMode&&selectedIds.size>0&&(
-        <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'10px 14px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60}}>
+        <div style={{position:'fixed',bottom:64,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'10px 14px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,maxWidth:900,margin:'0 auto'}}>
           <div style={{fontSize:12,fontWeight:700,marginBottom:8,textAlign:'center'}}>{selectedIds.size} produk dipilih</div>
           <div style={{display:'flex',gap:6}}>
             <button onClick={()=>setShowBulkEdit(true)}
@@ -3731,7 +3731,7 @@ function BersihkanSatuanGandaTool({onBack}) {
             ))}
           </div>
 
-          <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)'}}>
+          <div style={{position:'fixed',bottom:64,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,maxWidth:600,margin:'0 auto'}}>
             {cleaning&&<div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:8}}>⏳ Membersihkan {progress}/{selectedIds.size}...</div>}
             <button onClick={bersihkan} disabled={cleaning||selectedIds.size===0}
               style={{width:'100%',padding:13,background:cleaning?MT:OR,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
