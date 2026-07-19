@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PRINTCOLORFIX";
+const APP_VERSION = "v14.07.2026-HAPUSBYPASS";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -1406,7 +1406,7 @@ function ItemModal({item, onClose, onUpdate, onRemove}) {
 
 
 // ── Panel Kanan: Keranjang + Bayar ─────────────────────────────────────────
-function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess, reload, bypassStok=false, onBypassChange}) {
+function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess, reload}) {
   const [itemModal, setItemModal] = useState(null); // item yang sedang diedit
   const [paid, setPaid] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1544,8 +1544,8 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
     // Validasi qty tidak boleh 0
     const invalidQty = cart.filter(i=>parseQty(i.qty)<=0);
     if(invalidQty.length>0) return alert('Qty tidak boleh 0!\nProduk: '+invalidQty.map(i=>i.name).join(', '));
-    // Validasi stok cukup — cek FRESH ke database, agregat per produk (skip kalau bypass aktif)
-    if(!bypassStok) {
+    // Validasi stok cukup — cek FRESH ke database, agregat per produk
+    {
       const needMap = {};
       cart.forEach(i=>{
         if(!i.id||i.pakai_stok===false) return;
@@ -1563,7 +1563,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
         if(Array.isArray(fresh)&&fresh.length){
           const kurang = fresh.filter(p=>needMap[p.id]>(p.stock||0))
             .map(p=>`• ${p.name}: butuh ${needMap[p.id]}, stok tersisa ${p.stock||0} ${p.unit_kecil||'pcs'}`);
-          if(kurang.length) return alert('❌ Stok tidak cukup!\n\n'+kurang.join('\n')+'\n\nKurangi jumlah, atau aktifkan bypass stok (🔓) jika stok fisik memang tersedia.');
+          if(kurang.length) return alert('❌ Stok tidak cukup!\n\n'+kurang.join('\n')+'\n\nKurangi jumlah, atau update stok di halaman Edit Barang kalau stok fisik memang tersedia.');
           // Segarkan snapshot stok keranjang agar pemotongan stok menulis angka yang benar
           cart.forEach(i=>{ const f=fresh.find(p=>p.id===i.id); if(f) i.stock=f.stock; });
         } else {
@@ -2028,30 +2028,6 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
           </div>
         )}
 
-        {/* Bypass stok toggle + warning */}
-        <div style={{padding:'8px 14px 0'}}>
-          {bypassStok ? (
-            <div style={{padding:'8px 12px',background:'#FFF3E0',border:`1.5px solid ${OR}`,borderRadius:8,display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-              <div>
-                <div style={{fontSize:11,fontWeight:700,color:OR}}>🔓 Bypass Stok AKTIF</div>
-                <div style={{fontSize:10,color:'#7d4e00'}}>Stok tidak dicek — barang mungkin kosong!</div>
-              </div>
-              <button onClick={()=>onBypassChange&&onBypassChange(false)}
-                style={{padding:'4px 10px',background:OR,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontSize:10,fontWeight:700,flexShrink:0}}>
-                Nonaktifkan
-              </button>
-            </div>
-          ) : (
-            <button onClick={()=>{
-              if(confirm('⚠️ Aktifkan bypass stok?\nStok tidak akan dicek. Gunakan hanya jika stok belum terupdate!'))
-                onBypassChange&&onBypassChange(true);
-            }}
-              style={{width:'100%',padding:'6px 0',background:'#F5F6FA',border:'1.5px solid #eee',borderRadius:8,cursor:'pointer',fontSize:11,color:MT,fontWeight:600,marginBottom:6}}>
-              🔒 Cek Stok Aktif — Klik untuk Bypass
-            </button>
-          )}
-        </div>
-
         {/* Tombol Bayar */}
         <button onClick={processPayment}
           disabled={saving||(statusBayar==='Lunas'&&(!paid||paidNum<total))}
@@ -2209,7 +2185,6 @@ function Transaksi({onGotoProduct}={}) {
   const [listening, setListening] = useState(false);
   const [activeCat, setActiveCat] = useState('Semua');
   const [loading, setLoading] = useState(true);
-  const [bypassStok, setBypassStok] = useState(false); // mode bypass stok
   const [error, setError] = useState(null);
 
   const load = useCallback(async()=>{
@@ -2307,7 +2282,7 @@ function Transaksi({onGotoProduct}={}) {
     const cartKey = product.id+'_'+unit;
     setCart(prev=>{
       // Guard stok: total kebutuhan semua baris produk ini + 1 unit baru
-      if(!bypassStok && product.id && product.pakai_stok!==false){
+      if(product.id && product.pakai_stok!==false){
         const per   = product._unitBesar?(product._konversi||1):1;
         const sudah = prev.reduce((s,i)=>i.id===product.id?s+(parseQty(i.qty)*(i._unitBesar?(i._konversi||1):1)):s,0);
         if(sudah+per>(product.stock||0)){
@@ -2333,7 +2308,7 @@ function Transaksi({onGotoProduct}={}) {
     }
   };
   const updateQty   = (cartKey,d)        => setCart(prev=>{
-    if(d>0&&!bypassStok){
+    if(d>0){
       const it = prev.find(i=>(i.cartKey||i.id+'_Pcs')===cartKey);
       if(it&&it.id&&it.pakai_stok!==false){
         const per   = it._unitBesar?(it._konversi||1):1;
@@ -2460,7 +2435,7 @@ function Transaksi({onGotoProduct}={}) {
             <>
               {/* Mode: Multi Satuan - Dynamic dari product fields */}
               <div style={{marginBottom:10,padding:'8px 12px',background:'#F5F6FA',borderRadius:8,fontSize:11,color:MT}}>
-                📦 Stok: <b>{unitSelector.product?.stock||0} {unitSelector.product?.unit_kecil||'pcs'}</b>
+                {unitSelector.product?.pakai_stok!==false && <>📦 Stok: <b>{unitSelector.product?.stock||0} {unitSelector.product?.unit_kecil||'pcs'}</b></>}
                 {(unitSelector.product?.konversi||1)>1&&(
                   <span> = <b>{Math.floor((unitSelector.product?.stock||0)/(unitSelector.product?.konversi||1))} {unitSelector.product?.unit_besar}</b></span>
                 )}
@@ -2597,14 +2572,6 @@ function Transaksi({onGotoProduct}={}) {
               style={{width:42,height:42,borderRadius:10,background:'#F3E5F5',border:'1.5px solid #8E44AD',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:19}}>
               🤖
             </button>
-            {/* Bypass Stok Toggle */}
-            <button onClick={()=>{
-              if(!bypassStok){if(!confirm('⚠️ Aktifkan bypass stok?\nStok tidak akan dicek. Gunakan jika stok belum terupdate!')) return;}
-              setBypassStok(v=>!v);
-            }} title={bypassStok?'Bypass stok AKTIF':'Bypass stok nonaktif'}
-              style={{width:42,height:42,borderRadius:10,background:bypassStok?OR:'#F5F6FA',border:`1.5px solid ${bypassStok?OR:'#eee'}`,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:16}}>
-              {bypassStok?'🔓':'🔒'}
-            </button>
               </>
             )}
           </div>
@@ -2663,13 +2630,13 @@ function Transaksi({onGotoProduct}={}) {
             <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4,scrollbarWidth:'none'}}>
               {favoritProducts.map(p=>(
                 <button key={p.id} onClick={()=>{
-                    if(p.stock<=0&&!bypassStok) return alert('Stok habis! Aktifkan bypass stok di panel kanan untuk tetap menjual.');
+                    if(p.pakai_stok!==false && p.stock<=0) return alert('Stok habis! Update stok di halaman Edit Barang kalau stok fisik memang tersedia.');
                     addToCart(p);
                   }}
                   style={{flexShrink:0,width:104,padding:'10px 8px',background:'#FFF8E1',border:`1.5px solid #F9A825`,borderRadius:12,cursor:'pointer',textAlign:'left'}}>
                   <div style={{fontSize:11,fontWeight:700,color:TX,lineHeight:1.3,minHeight:28,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{p.name}</div>
                   <div style={{fontSize:11,fontWeight:800,color:GD,marginTop:4}}>{fmt(p.price)}</div>
-                  <div style={{fontSize:9,color:MT,marginTop:1}}>sisa {p.stock}</div>
+                  {p.pakai_stok!==false&&<div style={{fontSize:9,color:MT,marginTop:1}}>sisa {p.stock}</div>}
                 </button>
               ))}
             </div>
@@ -2709,7 +2676,7 @@ function Transaksi({onGotoProduct}={}) {
                   <div style={{flex:1,minWidth:0}}
                     onClick={()=>{
                       if(longPressFired.current){ longPressFired.current=false; return; }
-                      if(p.stock<=0&&!bypassStok) return alert('Stok habis! Aktifkan bypass stok di panel kanan untuk tetap menjual.');
+                      if(p.pakai_stok!==false && p.stock<=0) return alert('Stok habis! Update stok di halaman Edit Barang kalau stok fisik memang tersedia.');
                       addToCart(p);
                     }}
                     onMouseDown={()=>startLongPress(()=>onGotoProduct&&onGotoProduct(p.id))}
@@ -2720,7 +2687,7 @@ function Transaksi({onGotoProduct}={}) {
                     onTouchMove={cancelLongPress}>
                     <div style={{fontSize:13,fontWeight:700,color:TX,lineHeight:1.3}}>{p.name}</div>
                     <div style={{fontSize:12,marginTop:2}}>
-                      <span style={{color:MT}}>sisa {p.stock} · </span>
+                      {p.pakai_stok!==false&&<span style={{color:MT}}>sisa {p.stock} · </span>}
                       <span style={{color:GD,fontWeight:700}}>{fmt(p.price)}</span>
                     </div>
                     <div style={{fontSize:10,color:'#bbb',marginTop:1}}>{getSub(p.category)}{getBrand(p.category)&&getBrand(p.category)!=='Umum'?` · ${getBrand(p.category)}`:''}</div>
@@ -2729,15 +2696,15 @@ function Transaksi({onGotoProduct}={}) {
                   <div style={{flexShrink:0}}>
                     {qty===0
                       ? <button onClick={()=>{
-                            if(p.stock<=0&&!bypassStok) return alert('Stok habis!');
+                            if(p.pakai_stok!==false && p.stock<=0) return alert('Stok habis!');
                             addToCart(p);
                           }}
-                          style={{width:34,height:34,borderRadius:'50%',background:p.stock<=0&&!bypassStok?MT:G,border:'none',color:'#fff',fontSize:22,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,boxShadow:'0 2px 6px rgba(46,204,113,0.35)'}}>+</button>
+                          style={{width:34,height:34,borderRadius:'50%',background:(p.pakai_stok!==false && p.stock<=0)?MT:G,border:'none',color:'#fff',fontSize:22,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,boxShadow:'0 2px 6px rgba(46,204,113,0.35)'}}>+</button>
                       : <div style={{display:'flex',alignItems:'center',gap:5}}>
                           <button onClick={()=>updateQty((cart.find(i=>i.id===p.id)?.cartKey||p.id+'_Pcs'),-1)} style={{width:28,height:28,borderRadius:'50%',background:'#fff',border:`2px solid ${G}`,color:G,fontSize:16,cursor:'pointer',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>−</button>
                           <span style={{minWidth:22,textAlign:'center',fontWeight:800,fontSize:14,color:TX}}>{qty}</span>
                           <button onClick={()=>{
-                              if(p.stock<=0&&!bypassStok) return;
+                              if(p.pakai_stok!==false && p.stock<=0) return;
                               addToCart(p);
                             }} style={{width:28,height:28,borderRadius:'50%',background:G,border:'none',color:'#fff',fontSize:16,cursor:'pointer',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>+</button>
                         </div>
@@ -2776,7 +2743,7 @@ function Transaksi({onGotoProduct}={}) {
               <button onClick={()=>setShowMobileCart(false)} style={{background:'#eee',border:'none',borderRadius:'50%',width:30,height:30,cursor:'pointer',fontSize:16,fontWeight:700}}>×</button>
             </div>
             <div style={{flex:1,overflowY:'auto'}}>
-              <PanelKanan cart={cart} setCart={setCart} updateQty={updateQty} updatePrice={updatePrice} clearCart={()=>{clearCart();setShowMobileCart(false);}} reload={load} onSuccess={()=>setShowMobileCart(false)} bypassStok={bypassStok} onBypassChange={setBypassStok}/>
+              <PanelKanan cart={cart} setCart={setCart} updateQty={updateQty} updatePrice={updatePrice} clearCart={()=>{clearCart();setShowMobileCart(false);}} reload={load} onSuccess={()=>setShowMobileCart(false)}/>
             </div>
           </div>
         </div>
@@ -2792,8 +2759,6 @@ function Transaksi({onGotoProduct}={}) {
           clearCart={clearCart}
           reload={load}
           onSuccess={()=>{}}
-          bypassStok={bypassStok}
-          onBypassChange={setBypassStok}
         />
       </div>
     </div>
