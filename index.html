@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-AIMATCHFIX";
+const APP_VERSION = "v14.07.2026-JAMSTRUKFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -694,9 +694,9 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
 }
 
 
-function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, status, onNew, kasirName, txId, dueDate}) {
+function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, status, onNew, kasirName, txId, dueDate, createdAt}) {
   const change    = paidNum - total;
-  const now       = new Date();
+  const now       = createdAt ? new Date(createdAt) : new Date();
   const tgl       = now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
   const jam       = now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
   const [printMode, setPrintMode] = useState(null);
@@ -5861,6 +5861,7 @@ function HutangPiutang() {
       kasirName={selectedInvoice.dilayani_oleh||'Admin'}
       txId={selectedInvoice.id}
       dueDate={selectedInvoice.due_date}
+      createdAt={selectedInvoice.created_at}
       onNew={()=>setShowStruk(false)}
     />
   );
@@ -8168,6 +8169,7 @@ function LaporanPenjualan({initialTxId, onConsumeTarget}={}) {
           kasirName={selected.dilayani_oleh||selected.kasir||'Admin'}
           txId={selected.id}
           dueDate={selected.due_date}
+          createdAt={selected.created_at}
           onNew={()=>setShowStruk(false)}
         />
       )}
