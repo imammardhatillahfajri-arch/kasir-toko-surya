@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-TOMBOLKETUTUP";
+const APP_VERSION = "v14.07.2026-PRINTCOLORFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -777,7 +777,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
       const w = window.PRINTER_UKURAN==='80mm'?'80mm':'58mm';
     style.innerHTML = `@media print{body>*:not(#print-root){display:none!important}#print-root>*{display:none!important}#print-root #struk-thermal{display:block!important;position:fixed;top:0;left:0;width:${w};font-family:'Courier New',monospace;font-size:9pt;line-height:1.4;color:#000;background:#fff}@page{margin:0;size:${w} auto}}`;
     } else {
-      style.innerHTML = `@media print{body>*:not(#print-root){display:none!important}#print-root>*{display:none!important}#print-root #struk-a4{display:block!important;position:fixed;top:0;left:0;width:100%;padding:6mm;color:#000;background:#fff}@page{margin:4mm;size:A5 landscape}}`;  
+      style.innerHTML = `@media print{body>*:not(#print-root){display:none!important}#print-root>*{display:none!important}#print-root #struk-a4{display:block!important;position:fixed;top:0;left:0;width:100%;padding:6mm;color:#000;background:#fff}#print-root #struk-a4 *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}@page{margin:4mm;size:A5 landscape}}`;  
     }
     document.head.appendChild(style);
     const cleanup=()=>{ const el=document.getElementById('struk-print-css'); if(el)el.remove(); setPrintMode(null); };
@@ -1247,6 +1247,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
                 style={{padding:'10px 6px',background:'#E8F5E9',border:`1.5px solid ${G}`,borderRadius:12,cursor:'pointer',textAlign:'center'}}>
                 <div style={{fontSize:18,marginBottom:3}}>🖨️</div>
                 <div style={{fontWeight:700,fontSize:11,color:GD}}>Cetak A5</div>
+                <div style={{fontSize:9,color:MT,marginTop:1}}>Printer biasa (WiFi/USB)</div>
               </button>
               <button onClick={printBluetooth} disabled={btPrinting}
                 style={{gridColumn:'span 2',padding:'10px 6px',background:btPrinting?'#eee':'#EDE7F6',border:`1.5px solid #7B1FA2`,borderRadius:12,cursor:'pointer',textAlign:'center'}}>
@@ -5173,7 +5174,7 @@ function printNotaRetur(retur, items) {
     .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0;background:#F5F6FA;padding:12px;border-radius:8px}
     .info-item label{font-size:10px;color:#777;display:block}
     .info-item span{font-weight:600;font-size:12px}
-    @media print{body{padding:8px}button{display:none}}
+    @media print{body{padding:8px}button{display:none}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}}
   </style></head><body>
     <div class="header">
       <div>
@@ -5228,7 +5229,7 @@ function printInvoicePO(po) {
     .info-item label{font-size:11px;color:#777;display:block;margin-bottom:2px}
     .info-item span{font-weight:600;font-size:13px}
     .footer{text-align:center;margin-top:30px;padding-top:16px;border-top:1px dashed #ccc;color:#777;font-size:12px}
-    @media print{body{padding:10px}button{display:none}}
+    @media print{body{padding:10px}button{display:none}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}}
   </style></head><body>
   <div class="header">
     <div>
