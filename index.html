@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PRIORITASFREKUENSI";
+const APP_VERSION = "v14.07.2026-BERSIHDUPLIKAT";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -2478,8 +2478,8 @@ function Transaksi({onGotoProduct}={}) {
                 <div style={{fontWeight:800,fontSize:16,color:GD}}>{fmt(unitSelector.product?.price||0)}</div>
               </button>
 
-              {/* Unit Besar - hanya tampil kalau ada konversi */}
-              {(unitSelector.product?.konversi||1)>1 && unitSelector.product?.harga_besar>0 && (
+              {/* Unit Besar (field cepat) — hanya tampil kalau BELUM ada satuan di tabel Kelola Satuan (product_units), biar gak dobel */}
+              {(unitSelector.product?.konversi||1)>1 && unitSelector.product?.harga_besar>0 && (unitSelector.units||[]).filter(u=>u&&u.id).length===0 && (
                 <button onClick={()=>{
                   // Saat jual unit besar, kurangi stok sesuai konversi
                   const prod = {...unitSelector.product};
@@ -3251,6 +3251,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
   if(view==='stockDetail' && selectedProduct) return <DetailSisaStokView product={selectedProduct} onBack={()=>setView('detail')} onRefresh={()=>refreshSelected(selectedProduct.id)}/>;
   if(view==='rapikan') return <RapikanSatuanTool onBack={()=>{setView('list');load();}}/>;
   if(view==='cekKonversi') return <CekKonversiTool onBack={()=>{setView('list');load();}}/>;
+  if(view==='bersihkanSatuan') return <BersihkanSatuanGandaTool onBack={()=>{setView('list');load();}}/>;
   if(view==='pelanggan' && selectedProduct)   return <PelangganBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
   if(view==='supplier' && selectedProduct)    return <SupplierBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
 
@@ -3300,6 +3301,11 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
           style={{padding:"11px 14px",background:'#F5F6FA',color:TX,border:'1.5px solid #eee',borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
           title="Cek Konversi Satuan">
           🔍
+        </button>
+        <button onClick={()=>setView('bersihkanSatuan')}
+          style={{padding:"11px 14px",background:'#FFF3D6',color:OR,border:`1.5px solid ${OR}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
+          title="Bersihkan Data Satuan Ganda">
+          🔁
         </button>
       </div>
       {bulkMode&&(
@@ -3634,6 +3640,110 @@ function CekKonversiTool({onBack}) {
   );
 }
 
+// ── Alat Bersihkan Data Satuan Ganda — cari produk yang punya 2 sistem satuan sekaligus ─
+function BersihkanSatuanGandaTool({onBack}) {
+  const [loading, setLoading] = useState(true);
+  const [affected, setAffected] = useState([]); // {product, unitEntries}
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [cleaning, setCleaning] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const load = useCallback(async()=>{
+    setLoading(true);
+    try {
+      const [products, allUnits] = await Promise.all([
+        sbGetAll('products',{order:'name'}),
+        sbGetAll('product_units',{order:'id'}),
+      ]);
+      const unitsByProduct = {};
+      (allUnits||[]).forEach(u=>{
+        if(!unitsByProduct[u.product_id]) unitsByProduct[u.product_id]=[];
+        unitsByProduct[u.product_id].push(u);
+      });
+      const dup = products
+        .filter(p=>(p.unit_besar||'').trim() && (unitsByProduct[p.id]||[]).length>0)
+        .map(p=>({product:p, unitEntries:unitsByProduct[p.id]}));
+      setAffected(dup);
+      setSelectedIds(new Set(dup.map(d=>d.product.id))); // default semua kecentang
+    } catch(e){ setAffected([]); }
+    setLoading(false);
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  const toggleSelect = (id) => setSelectedIds(prev=>{
+    const next = new Set(prev);
+    if(next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const bersihkan = async() => {
+    if(selectedIds.size===0) return alert('Pilih minimal 1 produk dulu!');
+    if(!confirm(`Bersihkan field satuan cepat (Unit Besar/Konversi/Harga Jual Unit Besar) dari ${selectedIds.size} produk?\n\nData di "Kelola Satuan & Harga" (yang lebih lengkap) TIDAK akan disentuh — cuma field cepat yang dikosongkan karena sudah tidak dipakai.`)) return;
+    setCleaning(true);
+    try {
+      const targets = affected.filter(d=>selectedIds.has(d.product.id));
+      setProgress(0);
+      for(let i=0;i<targets.length;i++){
+        await sbUpdate('products', targets[i].product.id, {unit_besar:null, konversi:1, harga_besar:0});
+        setProgress(i+1);
+      }
+      alert(`✅ ${targets.length} produk berhasil dibersihkan!`);
+      await load();
+    } catch(e){ alert(`Gagal di tengah proses: ${e.message}\n(${progress}/${selectedIds.size} berhasil sebelum error)`); }
+    setCleaning(false);
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🧹 Bersihkan Data Satuan Ganda</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:16}}>Nemuin produk yang punya 2 sistem satuan sekaligus (field cepat Unit Besar DAN tabel Kelola Satuan) — biasanya bikin pilihan satuan dobel pas checkout. Field cepatnya bisa dikosongkan, data di Kelola Satuan tetap aman karena itu yang jadi acuan utama.</div>
+
+      {loading ? <Loading/> : affected.length===0 ? (
+        <div style={{textAlign:'center',color:GD,fontSize:14,fontWeight:700,padding:32,background:'#E0F7E9',borderRadius:12}}>
+          ✅ Aman! Tidak ada produk yang kena data satuan ganda.
+        </div>
+      ) : (
+        <>
+          <div style={{background:'#FFF3D6',border:`1.5px solid ${OR}`,borderRadius:10,padding:'10px 12px',marginBottom:12,fontSize:12,color:OR,fontWeight:600}}>
+            ⚠️ Ditemukan {affected.length} produk dengan data satuan ganda.
+          </div>
+          <button onClick={()=>setSelectedIds(prev=>prev.size===affected.length?new Set():new Set(affected.map(d=>d.product.id)))}
+            style={{fontSize:12,fontWeight:700,color:'#1976D2',background:'none',border:'none',cursor:'pointer',marginBottom:10}}>
+            {selectedIds.size===affected.length?'☑️ Batalkan Semua':'☐ Pilih Semua'} ({selectedIds.size}/{affected.length})
+          </button>
+
+          <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:80}}>
+            {affected.map(({product:p, unitEntries},i)=>(
+              <label key={p.id} onClick={()=>toggleSelect(p.id)}
+                style={{display:'flex',gap:10,padding:'12px 14px',borderBottom:i<affected.length-1?'1px solid #f0f0f0':'none',cursor:'pointer',background:selectedIds.has(p.id)?'#FFF8E1':'#fff'}}>
+                <input type="checkbox" checked={selectedIds.has(p.id)} onChange={()=>{}} style={{width:18,height:18,accentColor:OR,flexShrink:0,marginTop:2}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                  <div style={{fontSize:11,color:RD,marginTop:3}}>
+                    🗑️ Akan dihapus: {p.unit_besar} (1 {p.unit_besar} = {p.konversi} {p.unit_kecil||'pcs'}, {fmt(p.harga_besar||0)})
+                  </div>
+                  <div style={{fontSize:11,color:GD,marginTop:2}}>
+                    ✅ Tetap dipakai: {unitEntries.map(u=>u.unit_name).join(', ')}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+
+          <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)'}}>
+            {cleaning&&<div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:8}}>⏳ Membersihkan {progress}/{selectedIds.size}...</div>}
+            <button onClick={bersihkan} disabled={cleaning||selectedIds.size===0}
+              style={{width:'100%',padding:13,background:cleaning?MT:OR,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
+              {cleaning?'⏳ Membersihkan...':`🧹 Bersihkan ${selectedIds.size} Produk`}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function RapikanSatuanTool({onBack}) {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState([]);
@@ -3885,6 +3995,7 @@ function BulkEditSatuanModal({products, onClose, onDone}) {
 }
 
 function BulkEditHargaModal({products, onClose, onDone}) {
+  const [field, setField] = useState('price'); // price (jual) | buy_price (beli)
   const [mode, setMode] = useState('set'); // set | naik_persen | turun_persen | naik_rp | turun_rp
   const [nilai, setNilai] = useState('');
   const [saving, setSaving] = useState(false);
@@ -3911,19 +4022,20 @@ function BulkEditHargaModal({products, onClose, onDone}) {
   ];
 
   const preview = products.slice(0,4);
+  const fieldLabel = field==='price' ? 'Harga Jual' : 'Harga Beli';
 
   const terapkan = async() => {
     if(!nilai||parseFloat(nilai)<0) return alert('Isi nilai perubahan dulu!');
-    if(!confirm(`Yakin ubah harga jual ${products.length} produk sekaligus? Aksi ini tidak bisa di-undo otomatis.`)) return;
+    if(!confirm(`Yakin ubah ${fieldLabel.toLowerCase()} ${products.length} produk sekaligus? Aksi ini tidak bisa di-undo otomatis.`)) return;
     setSaving(true);
     try {
       for(let i=0;i<products.length;i++) {
         const p = products[i];
-        const newPrice = Math.max(0, hitungHargaBaru(p.price||0));
-        await sbUpdate('products', p.id, {price: newPrice});
+        const newPrice = Math.max(0, hitungHargaBaru(p[field]||0));
+        await sbUpdate('products', p.id, {[field]: newPrice});
         setProgress(i+1);
       }
-      alert(`✅ Berhasil ubah harga ${products.length} produk!`);
+      alert(`✅ Berhasil ubah ${fieldLabel.toLowerCase()} ${products.length} produk!`);
       onDone();
     } catch(e){ alert('Gagal di tengah proses: '+e.message+`\n(${progress}/${products.length} berhasil diubah sebelum error)`); }
     setSaving(false);
@@ -3936,6 +4048,16 @@ function BulkEditHargaModal({products, onClose, onDone}) {
         <div style={{fontWeight:800,fontSize:16,marginBottom:4}}>✏️ Ubah Harga Massal</div>
         <div style={{fontSize:12,color:MT,marginBottom:14}}>{products.length} produk dipilih</div>
 
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:6}}>Ubah Harga Apa?</label>
+        <div style={{display:'flex',gap:6,marginBottom:12}}>
+          {[['price','Harga Jual'],['buy_price','Harga Beli']].map(([val,label])=>(
+            <button key={val} onClick={()=>setField(val)}
+              style={{flex:1,padding:'9px 0',background:field===val?G:'#F5F6FA',color:field===val?'#fff':TX,border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:12}}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:6}}>Jenis Perubahan</label>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:12}}>
           {modeOptions.map(m=>(
@@ -3947,7 +4069,7 @@ function BulkEditHargaModal({products, onClose, onDone}) {
         </div>
 
         <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>
-          {mode==='set'?'Harga Baru (Rp)':mode.includes('persen')?'Persentase (%)':'Nominal (Rp)'}
+          {mode==='set'?`${fieldLabel} Baru (Rp)`:mode.includes('persen')?'Persentase (%)':'Nominal (Rp)'}
         </label>
         <input value={nilai} onChange={e=>setNilai(e.target.value.replace(/[^0-9.]/g,''))} placeholder="0" inputMode="decimal"
           style={{width:'100%',padding:'11px 14px',border:'1.5px solid #3498DB',borderRadius:8,fontSize:16,fontWeight:700,boxSizing:'border-box',marginBottom:14}}/>
@@ -3958,7 +4080,7 @@ function BulkEditHargaModal({products, onClose, onDone}) {
             {preview.map(p=>(
               <div key={p.id} style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:3}}>
                 <span style={{color:MT,maxWidth:'55%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</span>
-                <span><span style={{textDecoration:'line-through',color:'#bbb'}}>{fmt(p.price)}</span> → <b style={{color:GD}}>{fmt(Math.max(0,hitungHargaBaru(p.price||0)))}</b></span>
+                <span><span style={{textDecoration:'line-through',color:'#bbb'}}>{fmt(p[field]||0)}</span> → <b style={{color:GD}}>{fmt(Math.max(0,hitungHargaBaru(p[field]||0)))}</b></span>
               </div>
             ))}
           </div>
@@ -12072,8 +12194,13 @@ function Pembelian() {
   const getUnitList = (prod) => {
     const uk = prod.unit_kecil||'pcs';
     const list = [{name:uk, ratio:1}];
-    if(prod.unit_besar&&(prod.konversi||1)>1) list.push({name:prod.unit_besar, ratio:prod.konversi||1});
-    (poUnits[prod.id]||[]).forEach(u=>{
+    const poUnitList = poUnits[prod.id]||[];
+    // Kalau sudah ada satuan di Kelola Satuan (product_units), itu jadi acuan utama —
+    // field cepat unit_besar di form produk dilewati biar gak dobel/mirip (mis. "Roll" vs "Roll (25 Meter)")
+    if(poUnitList.length===0 && prod.unit_besar&&(prod.konversi||1)>1) {
+      list.push({name:prod.unit_besar, ratio:prod.konversi||1});
+    }
+    poUnitList.forEach(u=>{
       const r = u.ratio||1;
       if(r>1&&!list.find(x=>x.name.toLowerCase()===String(u.unit_name||'').toLowerCase())) list.push({name:u.unit_name, ratio:r});
     });
