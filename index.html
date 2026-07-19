@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-DUPIDFIX";
+const APP_VERSION = "v14.07.2026-PRINTVISFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -775,9 +775,24 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
     style.id    = 'struk-print-css';
     if(printMode==='thermal'){
       const w = window.PRINTER_UKURAN==='80mm'?'80mm':'58mm';
-    style.innerHTML = `@media print{body>*:not(#print-root){display:none!important}#print-root>*{display:none!important}#print-root #struk-thermal{display:block!important;position:fixed;top:0;left:0;width:${w};font-family:'Courier New',monospace;font-size:9pt;line-height:1.4;color:#000;background:#fff}@page{margin:0;size:${w} auto}}`;
+    style.innerHTML = `@media print{
+      body *{visibility:hidden!important}
+      #print-root, #print-root #struk-thermal, #print-root #struk-thermal *{visibility:visible!important}
+      #print-root{position:fixed!important;top:0!important;left:0!important;overflow:visible!important}
+      #print-root #struk-thermal{display:block!important;position:fixed!important;top:0;left:0;width:${w};font-family:'Courier New',monospace;font-size:9pt;line-height:1.4;color:#000;background:#fff}
+      #print-root #struk-a4{display:none!important}
+      @page{margin:0;size:${w} auto}
+    }`;
     } else {
-      style.innerHTML = `@media print{body>*:not(#print-root){display:none!important}#print-root>*{display:none!important}#print-root #struk-a4{display:block!important;position:fixed;top:0;left:0;width:100%;padding:6mm;color:#000;background:#fff}#print-root #struk-a4 *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}@page{margin:4mm;size:A5 landscape}}`;  
+      style.innerHTML = `@media print{
+      body *{visibility:hidden!important}
+      #print-root, #print-root #struk-a4, #print-root #struk-a4 *{visibility:visible!important}
+      #print-root{position:fixed!important;top:0!important;left:0!important;overflow:visible!important}
+      #print-root #struk-a4{display:block!important;position:fixed!important;top:0;left:0;width:100%;padding:6mm;color:#000;background:#fff;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
+      #print-root #struk-a4 *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
+      #print-root #struk-thermal{display:none!important}
+      @page{margin:4mm;size:A5 landscape}
+    }`;
     }
     document.head.appendChild(style);
     const cleanup=()=>{ const el=document.getElementById('struk-print-css'); if(el)el.remove(); setPrintMode(null); };
