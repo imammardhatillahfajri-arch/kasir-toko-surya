@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-KONVERSIDISKON";
+const APP_VERSION = "v14.07.2026-AIDISKONDETECT";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -10196,12 +10196,16 @@ function ScanNota({onBack, onDataReady}) {
       // Normalize
       parsed.items = (parsed.items||[]).map(item=>{
         const isiPerSatuan = parseFloat(item.isi_per_satuan)||0;
+        // Validasi ringan: diskon dari AI harus cuma angka/titik/tanda + (format "5+5+5" atau "10"), selain itu abaikan
+        const diskonMentah = String(item.diskon_persen||'').trim();
+        const diskonValid = /^[0-9.]+(\+[0-9.]+)*$/.test(diskonMentah) ? diskonMentah : '0';
         return {
           nama:   (item.nama||'').toUpperCase(),
           qty:    parseFloat(item.qty)||1,
           harga:  parseInt(item.harga)||0,
           satuan: (item.satuan||'pcs').toUpperCase(),
           isi_per_satuan: isiPerSatuan>1 ? isiPerSatuan : '', // dikonfirmasi/diedit kasir sebelum disimpan
+          diskon_persen: diskonValid, // terdeteksi AI dari nota, tetap bisa diedit manual
           product_id: null,
         };
       });
