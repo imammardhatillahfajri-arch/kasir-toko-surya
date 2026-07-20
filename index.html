@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-BULKKONVERSI";
+const APP_VERSION = "v14.07.2026-PRINTREWRITE";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -699,7 +699,6 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
   const now       = createdAt ? new Date(createdAt) : new Date();
   const tgl       = now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
   const jam       = now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
-  const [printMode, setPrintMode] = useState(null);
   const [jatusTempo, setJatusTempo] = useState('');
   const [dueDateISO, setDueDateISO] = useState(''); // sumber kebenaran (YYYY-MM-DD), jatusTempo cuma tampilan
   const [previewMode, setPreviewMode] = useState(null); // null | 'thermal' | 'a4'
@@ -768,38 +767,6 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
     setJatusTempo(d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'}));
   },[dueDate]);
 
-  // Print CSS
-  React.useEffect(()=>{
-    if(!printMode) return;
-    const style = document.createElement('style');
-    style.id    = 'struk-print-css';
-    if(printMode==='thermal'){
-      const w = window.PRINTER_UKURAN==='80mm'?'80mm':'58mm';
-    style.innerHTML = `@media print{
-      body *{visibility:hidden!important}
-      #print-root, #print-root #struk-thermal, #print-root #struk-thermal *{visibility:visible!important}
-      #print-root{position:fixed!important;top:0!important;left:0!important;overflow:visible!important}
-      #print-root #struk-thermal{display:block!important;position:fixed!important;top:0;left:0;width:${w};font-family:'Courier New',monospace;font-size:9pt;line-height:1.4;color:#000;background:#fff}
-      #print-root #struk-a4{display:none!important}
-      @page{margin:0;size:${w} auto}
-    }`;
-    } else {
-      style.innerHTML = `@media print{
-      body *{visibility:hidden!important}
-      #print-root, #print-root #struk-a4, #print-root #struk-a4 *{visibility:visible!important}
-      #print-root{position:fixed!important;top:0!important;left:0!important;overflow:visible!important}
-      #print-root #struk-a4{display:block!important;position:fixed!important;top:0;left:0;width:100%;padding:6mm;color:#000;background:#fff;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
-      #print-root #struk-a4 *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
-      #print-root #struk-thermal{display:none!important}
-      @page{margin:4mm;size:A5 landscape}
-    }`;
-    }
-    document.head.appendChild(style);
-    const cleanup=()=>{ const el=document.getElementById('struk-print-css'); if(el)el.remove(); setPrintMode(null); };
-    window.addEventListener('afterprint',cleanup);
-    return()=>{ cleanup(); window.removeEventListener('afterprint',cleanup); };
-  },[printMode]);
-
   const hapusTransaksi = async() => {
     if(!txId) return alert('ID transaksi tidak ditemukan!');
     if(!confirm('Hapus transaksi ini?\nStok barang akan dikembalikan otomatis.\nData tidak bisa dikembalikan!')) return;
@@ -844,15 +811,6 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
       onNew();
     } catch(e){ alert('Gagal batalkan: '+e.message); }
     setDeleting(false);
-  };
-
-  const handlePrint = (mode, copies=1) => {
-    setPrintMode(mode);
-    setTimeout(()=>{
-      window.print();
-      // Print 2x kalau rangkap 2
-      if(copies===2) setTimeout(()=>window.print(), 1500);
-    },400);
   };
 
   // ── THERMAL ───────────────────────────────────────────────────────────────
@@ -1028,7 +986,9 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
         <div style={{flex:1,fontWeight:700,fontSize:14}}>
           👁️ Preview {previewMode==='thermal'?'Thermal 58mm':'A5 Landscape'}
         </div>
-        <button onClick={()=>handlePrint(previewMode)}
+        <button onClick={()=>previewMode==='thermal'
+            ? printStrukThermal({cart, total, paidNum, invoice, customer, status, kasirName, dueDate, createdAt})
+            : printStrukA5({cart, total, paidNum, invoice, customer, metodeBayar, status, kasirName, dueDate, createdAt})}
           style={{padding:'8px 18px',background:G,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>
           🖨️ Cetak Sekarang
         </button>
@@ -1233,7 +1193,7 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
                   <div style={{fontWeight:700,fontSize:12,color:OR}}>Preview Nota</div>
                   <div style={{fontSize:10,color:MT}}>Lihat sebelum cetak</div>
                 </button>
-                <button onClick={()=>handlePrint('a4',rangkap)}
+                <button onClick={()=>printStrukA5({cart, total, paidNum, invoice, customer, metodeBayar, status, kasirName, dueDate, createdAt})}
                   style={{padding:'12px 8px',background:'#FFF3E0',border:`1.5px solid ${OR}`,borderRadius:12,cursor:'pointer',textAlign:'center'}}>
                   <div style={{fontSize:20,marginBottom:4}}>📄</div>
                   <div style={{fontWeight:700,fontSize:12,color:OR}}>Cetak A5 ({rangkap}x)</div>
@@ -1253,12 +1213,12 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
                 <div style={{fontSize:18,marginBottom:3}}>👁️</div>
                 <div style={{fontWeight:700,fontSize:11,color:GD}}>Preview A5</div>
               </button>
-              <button onClick={()=>handlePrint('thermal')}
+              <button onClick={()=>printStrukThermal({cart, total, paidNum, invoice, customer, status, kasirName, dueDate, createdAt})}
                 style={{padding:'10px 6px',background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:12,cursor:'pointer',textAlign:'center'}}>
                 <div style={{fontSize:18,marginBottom:3}}>🖨️</div>
                 <div style={{fontWeight:700,fontSize:11,color:'#1976D2'}}>Cetak Thermal</div>
               </button>
-              <button onClick={()=>handlePrint('a4')}
+              <button onClick={()=>printStrukA5({cart, total, paidNum, invoice, customer, metodeBayar, status, kasirName, dueDate, createdAt})}
                 style={{padding:'10px 6px',background:'#E8F5E9',border:`1.5px solid ${G}`,borderRadius:12,cursor:'pointer',textAlign:'center'}}>
                 <div style={{fontSize:18,marginBottom:3}}>🖨️</div>
                 <div style={{fontWeight:700,fontSize:11,color:GD}}>Cetak A5</div>
@@ -5249,6 +5209,212 @@ function printNotaRetur(retur, items) {
     ${retur.notes?`<div style="font-size:11px;color:#777;margin-top:10px">Catatan: ${retur.notes}</div>`:''}
     <div style="text-align:center;margin-top:20px;color:#777;font-size:11px">Dokumen ini adalah bukti sah retur barang.</div>
     <div style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:10px 28px;background:#8E44AD;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Nota Retur</button></div>
+  </body></html>`);
+  w.document.close();
+}
+
+// ── Cetak Struk Penjualan (A5 & Thermal) — jendela baru, sama pola dengan
+// printInvoicePO/printNotaRetur yang terbukti stabil. Menggantikan mekanisme
+// lama (CSS sembunyikan-sebagian-halaman) yang rapuh di sejumlah printer/HP.
+function _strukKodeUnik(invoice, total, tgl, customer) {
+  const raw = `${invoice}|${total}|${tgl}|${customer||'Umum'}`;
+  let h = 0;
+  for(let i=0;i<raw.length;i++){ h=((h<<5)-h)+raw.charCodeAt(i); h=h&h; }
+  const hex = Math.abs(h).toString(16).toUpperCase().padStart(8,'0');
+  return `SL-${hex.slice(0,4)}-${hex.slice(4,8)}`;
+}
+function _strukJatuhTempo(dueDate, now) {
+  if(dueDate) {
+    const d = new Date(dueDate+'T00:00:00');
+    if(!isNaN(d)) return d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  }
+  const d = new Date(now); d.setDate(d.getDate()+7);
+  return d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+}
+
+function printStrukA5({cart, total, paidNum, invoice, customer, metodeBayar, status, kasirName, dueDate, createdAt}) {
+  const tokoNama    = window.TOKO_NAMA||'SURYA LISTRIK';
+  const tokoTagline = window.TOKO_TAGLINE||'Toko Alat Listrik & Bangunan';
+  const tokoAlamat  = window.TOKO_ALAMAT||'';
+  const tokoTelp    = window.TOKO_TELP||'';
+  const capUrl      = window.TOKO_CAP_URL||'';
+  const isPiutang   = status==='Piutang';
+  const now = createdAt ? new Date(createdAt) : new Date();
+  const tgl = now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  const jam = now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+  const change = (paidNum||0)-(total||0);
+  const jatusTempo = _strukJatuhTempo(dueDate, now);
+  const kodeUnik = _strukKodeUnik(invoice, total, tgl, customer);
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`${invoice}|${total}|${tgl}|${kodeUnik}`)}`;
+
+  const itemRows = (cart||[]).map((item,i)=>`
+    <tr style="background:${i%2===0?'#fff':'#f9f9f9'}">
+      <td style="padding:4px 6px;border-bottom:0.5px solid #eee;color:#888">${i+1}</td>
+      <td style="padding:4px 6px;border-bottom:0.5px solid #eee;font-weight:500">${item.name}</td>
+      <td style="padding:4px 6px;border-bottom:0.5px solid #eee;text-align:center">${item.qty} ${item.unit||'pcs'}</td>
+      <td style="padding:4px 6px;border-bottom:0.5px solid #eee;text-align:right">Rp ${(item.price||0).toLocaleString('id-ID')}</td>
+      <td style="padding:4px 6px;border-bottom:0.5px solid #eee;text-align:right;font-weight:600">Rp ${((item.price||0)*(item.qty||0)).toLocaleString('id-ID')}</td>
+    </tr>`).join('');
+
+  const w = window.open('','_blank','width=900,height=650');
+  w.document.write(`<!DOCTYPE html><html><head><title>Nota ${invoice}</title>
+  <style>
+    body{font-family:'Segoe UI',Arial,sans-serif;padding:16px;color:#000;background:#fff;max-width:900px;margin:0 auto;font-size:11px}
+    table{width:100%;border-collapse:collapse}
+    @media print{body{padding:6mm}button{display:none}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}}
+    @page{margin:4mm;size:A5 landscape}
+  </style></head><body>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1a472a;padding-bottom:10px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:12px">
+        ${capUrl?`<img src="${capUrl}" style="width:52px;height:52px;border-radius:50%;object-fit:contain;border:2px solid #1a472a">`:''}
+        <div>
+          <div style="font-size:20px;font-weight:700;color:#1a472a;letter-spacing:0.5px">${tokoNama}</div>
+          <div style="font-size:10px;color:#666">${tokoTagline}</div>
+          ${tokoAlamat?`<div style="font-size:9px;color:#888">${tokoAlamat}</div>`:''}
+          ${tokoTelp?`<div style="font-size:9px;color:#888">Telp: ${tokoTelp}</div>`:''}
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:17px;font-weight:700;color:${isPiutang?'#c0392b':'#1a472a'}">${isPiutang?'NOTA PIUTANG':'NOTA PENJUALAN'}</div>
+        <div style="font-size:10px;color:#666">No: ${invoice}</div>
+        <div style="font-size:10px;color:#666">${tgl} · ${jam} · Kasir: ${kasirName||'Admin'}</div>
+        <div style="margin-top:4px;display:inline-block;background:${isPiutang?'#faeeda':'#d5f5e3'};color:${isPiutang?'#7d6608':'#1d8348'};padding:2px 10px;border-radius:4px;font-size:10px;font-weight:700">
+          ${isPiutang?'BELUM LUNAS':'LUNAS'}
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:20px;background:#f9f9f9;border:1px solid #eee;border-radius:5px;padding:6px 10px;margin-bottom:10px;font-size:9px">
+      <div><span style="color:#888">Pelanggan: </span><span style="font-weight:600;font-size:11px">${customer||'Umum'}</span></div>
+      <div><span style="color:#888">Metode: </span><span style="font-weight:600">${metodeBayar}</span></div>
+      ${isPiutang&&paidNum>0?`<div><span style="color:#888">Uang Muka: </span><span style="font-weight:600">Rp ${(paidNum||0).toLocaleString('id-ID')}</span></div>`:''}
+      ${isPiutang?`<div style="margin-left:auto"><span style="color:#888">Jatuh Tempo: </span><span style="font-weight:700;color:#c0392b;font-size:11px">${jatusTempo}</span></div>`:''}
+    </div>
+
+    <div style="display:flex;gap:16px;margin-bottom:12px">
+      <div style="flex:2">
+        <table>
+          <thead><tr style="background:#1a472a;color:#fff">
+            <th style="padding:5px 6px;text-align:left;font-weight:600">No</th>
+            <th style="padding:5px 6px;text-align:left;font-weight:600">Nama Produk</th>
+            <th style="padding:5px 6px;text-align:center;font-weight:600">Qty</th>
+            <th style="padding:5px 6px;text-align:right;font-weight:600">Harga</th>
+            <th style="padding:5px 6px;text-align:right;font-weight:600">Subtotal</th>
+          </tr></thead>
+          <tbody>${itemRows}</tbody>
+        </table>
+      </div>
+      <div style="flex:0 0 175px;display:flex;flex-direction:column;gap:8px">
+        <div style="border:1.5px solid #1a472a;border-radius:8px;padding:10px 12px">
+          <div style="display:flex;justify-content:space-between;font-size:9px;color:#888;margin-bottom:4px"><span>Subtotal</span><span>Rp ${(total||0).toLocaleString('id-ID')}</span></div>
+          ${isPiutang&&paidNum>0?`<div style="display:flex;justify-content:space-between;font-size:9px;color:#888;margin-bottom:4px"><span>Uang Muka</span><span>Rp ${(paidNum||0).toLocaleString('id-ID')}</span></div>`:''}
+          <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;border-top:1.5px solid #1a472a;padding-top:6px;margin-top:2px">
+            <span>${isPiutang?'TOTAL HUTANG':'TOTAL'}</span>
+            <span style="color:${isPiutang?'#c0392b':'#1a472a'}">Rp ${(total||0).toLocaleString('id-ID')}</span>
+          </div>
+          ${!isPiutang&&paidNum>0?`<div style="display:flex;justify-content:space-between;font-size:9px;color:#888;margin-top:4px"><span>Dibayar</span><span>Rp ${(paidNum||0).toLocaleString('id-ID')}</span></div>`:''}
+          ${!isPiutang&&change>0?`<div style="display:flex;justify-content:space-between;font-size:9px;color:#888"><span>Kembalian</span><span>Rp ${change.toLocaleString('id-ID')}</span></div>`:''}
+          ${isPiutang?`<div style="display:flex;justify-content:space-between;font-size:10px;font-weight:700;color:#c0392b;margin-top:4px"><span>Sisa Tagihan</span><span>Rp ${((total||0)-(paidNum||0)).toLocaleString('id-ID')}</span></div>`:''}
+        </div>
+        <div style="text-align:center;border:1px solid #eee;border-radius:8px;padding:8px">
+          <img src="${qrUrl}" style="width:80px;height:80px;border-radius:4px">
+          <div style="font-size:7px;color:#aaa;margin-top:2px">Scan verifikasi</div>
+          <div style="font-size:8px;font-weight:700;font-family:monospace;color:#555;margin-top:1px">${kodeUnik}</div>
+        </div>
+      </div>
+    </div>
+
+    ${isPiutang?`<div style="background:#fef9e7;border:1px solid #f0c040;border-radius:5px;padding:6px 10px;font-size:9px;color:#7d6608;margin-bottom:10px">⚠️ Nota ini merupakan bukti hutang yang sah. Mohon dilunasi sebelum <b>${jatusTempo}</b>. Terima kasih.</div>`:''}
+
+    <div style="border-top:1px dashed #ccc;padding-top:10px;display:flex;justify-content:space-between;align-items:flex-end">
+      <div style="text-align:center;width:160px">
+        <div style="font-size:9px;color:#888;margin-bottom:3px">Hormat Kami,</div>
+        <div style="height:65px;border:1px dashed #ccc;border-radius:6px;position:relative;display:flex;align-items:center;justify-content:center;margin-bottom:4px;overflow:hidden">
+          ${capUrl?`<img src="${capUrl}" style="width:58px;height:58px;object-fit:contain;opacity:0.85">`:`<div style="width:54px;height:54px;border:2px dashed #1a472a44;border-radius:50%;display:flex;align-items:center;justify-content:center"><div style="font-size:7px;color:#1a472a55;font-weight:700;text-align:center;line-height:1.3">CAP<br>TOKO</div></div>`}
+        </div>
+        <div style="font-size:9px;font-weight:600">${kasirName||'Admin'}</div>
+        <div style="font-size:8px;color:#888">${tokoNama}</div>
+      </div>
+      <div style="text-align:center;flex:1;padding:0 16px">
+        <div style="background:#f5f5f5;border-radius:6px;padding:6px 10px;border:1px solid #eee;margin-bottom:6px">
+          <div style="font-size:8px;color:#aaa;margin-bottom:2px">Kode Verifikasi Dokumen</div>
+          <div style="font-size:14px;font-weight:700;font-family:monospace;letter-spacing:2px;color:#333">${kodeUnik}</div>
+          <div style="font-size:7px;color:#bbb;margin-top:1px">Kode ini terikat dengan ${invoice} dan tidak dapat dipalsukan</div>
+        </div>
+        <div style="font-size:8px;color:#aaa">${tokoNama} · ${tokoAlamat} · ${tokoTelp}</div>
+      </div>
+      <div style="text-align:center;width:160px">
+        <div style="font-size:9px;color:#888;margin-bottom:3px">${isPiutang?'Yang Berhutang,':'Penerima,'}</div>
+        <div style="height:65px;border:1px dashed #ccc;border-radius:6px;margin-bottom:4px;display:flex;align-items:flex-end;justify-content:flex-end;padding:3px 6px">
+          <div style="font-size:7px;color:#ccc">ttd</div>
+        </div>
+        <div style="font-size:9px;font-weight:600">${customer||'Pelanggan'}</div>
+        <div style="font-size:8px;color:#888">${isPiutang?'Pelanggan':'Penerima'}</div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:20px"><button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Nota</button></div>
+  </body></html>`);
+  w.document.close();
+}
+
+function printStrukThermal({cart, total, paidNum, invoice, customer, status, kasirName, dueDate, createdAt}) {
+  const tokoNama    = window.TOKO_NAMA||'SURYA LISTRIK';
+  const tokoTagline = window.TOKO_TAGLINE||'Toko Alat Listrik & Bangunan';
+  const tokoAlamat  = window.TOKO_ALAMAT||'';
+  const tokoTelp    = window.TOKO_TELP||'';
+  const isPiutang   = status==='Piutang';
+  const now = createdAt ? new Date(createdAt) : new Date();
+  const tgl = now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  const jam = now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+  const change = (paidNum||0)-(total||0);
+  const jatusTempo = _strukJatuhTempo(dueDate, now);
+  const kodeUnik = _strukKodeUnik(invoice, total, tgl, customer);
+  const qrSmall  = `https://api.qrserver.com/v1/create-qr-code/?size=75x75&data=${encodeURIComponent(`${invoice}|${total}|${tgl}|${kodeUnik}`)}`;
+  const w2 = window.PRINTER_UKURAN==='80mm'?'80mm':'58mm';
+
+  const itemLines = (cart||[]).map(item=>`
+    <div style="margin-bottom:3px">
+      <div style="font-weight:600;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name}</div>
+      <div style="display:flex;justify-content:space-between;font-size:8px;color:#555">
+        <span>${item.qty} ${item.unit||'pcs'} × Rp ${(item.price||0).toLocaleString('id-ID')}</span>
+        <span style="font-weight:700;color:#000">Rp ${((item.price||0)*(item.qty||0)).toLocaleString('id-ID')}</span>
+      </div>
+    </div>`).join('');
+
+  const w = window.open('','_blank','width=400,height=700');
+  w.document.write(`<!DOCTYPE html><html><head><title>Struk ${invoice}</title>
+  <style>
+    body{font-family:'Courier New',monospace;font-size:10px;line-height:1.5;color:#000;background:#fff;padding:8px 10px;width:${w2};margin:0 auto}
+    @media print{button{display:none}}
+    @page{margin:0;size:${w2} auto}
+  </style></head><body>
+    <div style="text-align:center;border-bottom:1px dashed #999;padding-bottom:6px;margin-bottom:6px">
+      <div style="font-weight:700;font-size:13px">${tokoNama}</div>
+      <div style="font-size:9px;color:#555">${tokoTagline}</div>
+      ${tokoAlamat?`<div style="font-size:8px;color:#555">${tokoAlamat}</div>`:''}
+      ${tokoTelp?`<div style="font-size:8px;color:#555">Telp: ${tokoTelp}</div>`:''}
+    </div>
+    <div style="font-size:8px;border-bottom:1px dashed #999;padding-bottom:4px;margin-bottom:4px">
+      <div>No: ${invoice}</div>
+      <div>${tgl} · ${jam}</div>
+      ${customer?`<div>Pelanggan: ${customer}</div>`:''}
+      ${kasirName?`<div>Kasir: ${kasirName}</div>`:''}
+      ${isPiutang?`<div style="font-weight:700;color:#c0392b">Jatuh Tempo: ${jatusTempo}</div>`:''}
+    </div>
+    ${itemLines}
+    <div style="border-top:1px dashed #999;margin-top:4px;padding-top:4px">
+      <div style="display:flex;justify-content:space-between;font-weight:700;font-size:11px"><span>TOTAL</span><span>Rp ${(total||0).toLocaleString('id-ID')}</span></div>
+      ${paidNum>0?`<div style="display:flex;justify-content:space-between;font-size:8px;color:#555"><span>Bayar</span><span>Rp ${(paidNum||0).toLocaleString('id-ID')}</span></div>`:''}
+      ${change>0?`<div style="display:flex;justify-content:space-between;font-size:8px;color:#555"><span>Kembali</span><span>Rp ${change.toLocaleString('id-ID')}</span></div>`:''}
+      ${isPiutang?`<div style="display:flex;justify-content:space-between;font-size:8px;color:#c0392b;font-weight:700"><span>Sisa Hutang</span><span>Rp ${((total||0)-(paidNum||0)).toLocaleString('id-ID')}</span></div>`:''}
+      <div style="display:flex;justify-content:space-between;font-size:8px;margin-top:2px"><span>Status</span><span style="font-weight:700;color:${isPiutang?'#c0392b':'#27ae60'}">${status}</span></div>
+    </div>
+    <div style="text-align:center;margin-top:6px">
+      <img src="${qrSmall}" style="width:70px;height:70px">
+      <div style="font-size:7px;color:#777;margin-top:2px">Kode: ${kodeUnik}</div>
+    </div>
+    <div style="text-align:center;border-top:1px dashed #999;margin-top:6px;padding-top:4px;font-size:7px;color:#777">${window.STRUK_FOOTER||'Terima kasih telah berbelanja!'}</div>
+    <div style="text-align:center;margin-top:10px"><button onclick="window.print()" style="padding:8px 20px;background:#1a472a;color:#fff;border:none;border-radius:6px;font-size:11px">🖨️ Print</button></div>
   </body></html>`);
   w.document.close();
 }
