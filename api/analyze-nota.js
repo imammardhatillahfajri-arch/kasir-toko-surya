@@ -145,20 +145,25 @@ Kembalikan HANYA JSON tanpa markdown:
   "tanggal": "YYYY-MM-DD atau string kosong jika tidak ada",
   "status_bayar": "Lunas atau Hutang",
   "items": [
-    {"nama": "nama produk lengkap (TANPA embel-embel @NNN)", "qty": angka, "harga": angka satuan, "satuan": "pcs/roll/meter/dus/dll", "isi_per_satuan": angka atau null}
+    {"nama": "nama produk lengkap (TANPA embel-embel @NNN)", "qty": angka, "harga": angka satuan (SEBELUM diskon), "satuan": "pcs/roll/meter/dus/dll", "isi_per_satuan": angka atau null, "diskon_persen": "string atau null"}
   ],
   "total": angka total keseluruhan,
   "catatan": "catatan tambahan dari nota jika ada",
   "no_nota": "nomor nota/faktur jika ada"
 }
 
-Aturan: Angka tanpa titik/koma (Rp 1.500 = 1500). Kredit/tempo = Hutang. Tunai/cash = Lunas.
+Aturan: Angka tanpa titik/koma (Rp 1.500 = 1500). Kredit/tempo = Hutang. Tunai/cash = Lunas. "harga" SELALU harga satuan SEBELUM diskon dipotong (harga kotor/asli), JANGAN dihitung setelah diskon — pemotongan diskon dilakukan sistem, bukan kamu.
 
 PENTING soal isi_per_satuan: supplier sering nulis nama barang dengan embel-embel "@NNN" (contoh: "ELBOW 1/2\\" AW PRALON @225"), artinya 1 satuan yang dibeli (misal 1 DUS) isinya NNN pcs (di contoh ini 225 pcs per dus). Kalau kamu temukan pola "@angka" ini:
 - Set isi_per_satuan = angka tersebut (contoh: 225)
 - Nama produk di field "nama" JANGAN ikutkan "@NNN"-nya, cukup nama bersih
-- "harga" tetap harga PER SATUAN YANG DIBELI (per dus/box), BUKAN dibagi — pembagian akan dilakukan di sistem
-Kalau tidak ada pola "@angka" atau satuannya memang sudah "pcs", isi_per_satuan = null.` }
+Kalau tidak ada pola "@angka" atau satuannya memang sudah "pcs", isi_per_satuan = null.
+
+PENTING soal diskon_persen: banyak nota/faktur (terutama dari distributor pipa/listrik) punya kolom "DISCOUNT" berjenjang, biasanya tertulis sebagai beberapa persentase berurutan per baris item, contoh kolom "1%: 5.00", "2%: 5.00", "3%: 5.00" — ini artinya diskon berjenjang 5% lalu 5% lagi lalu 5% lagi (bukan dijumlah jadi 15%, tapi dipotong berturut-turut). Kalau kamu temukan kolom diskon seperti ini per item:
+- Gabungkan semua angka persen yang ada (yang bukan nol/kosong) dengan tanda "+", urut dari kolom paling kiri. Contoh: kolom 1%=20.00, 2%=5.00, 3%=5.00 → diskon_persen = "20+5+5"
+- Kalau cuma ada satu angka diskon (bukan berjenjang) → diskon_persen = angka itu saja, contoh "10"
+- Kalau kolom diskon semuanya kosong/nol/tidak ada sama sekali → diskon_persen = null
+- JANGAN menghitung sendiri hasil potongannya — cukup kembalikan angka persennya, sistem yang akan menghitung.` }
         ]
       }]
     });
