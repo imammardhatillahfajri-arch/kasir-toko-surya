@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-SCANAIKONVERSI";
+const APP_VERSION = "v14.07.2026-KONVERSIDISKON";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -10349,7 +10349,8 @@ function ScanNota({onBack, onDataReady}) {
           initialHarga={(()=>{
             const it = extractedData.items[showTambahProduk];
             const k = parseFloat(it?.isi_per_satuan)||0;
-            return k>1 ? Math.round((it?.harga||0)/k) : (it?.harga||0);
+            const hargaBersih = (it?.harga||0) - applyTieredDiskon(it?.harga||0, it?.diskon_persen||'0');
+            return k>1 ? Math.round(hargaBersih/k) : hargaBersih;
           })()}
           initialKonversi={parseFloat(extractedData.items[showTambahProduk]?.isi_per_satuan)||1}
           initialUnitBesar={extractedData.items[showTambahProduk]?.satuan||''}
@@ -10630,12 +10631,16 @@ function ScanNota({onBack, onDataReady}) {
                   <input type="number" value={item.isi_per_satuan||''} placeholder="mis. 225"
                     onChange={e=>setExtractedData(p=>({...p,items:p.items.map((it,j)=>j===i?{...it,isi_per_satuan:e.target.value}:it)}))}
                     style={{width:'100%',padding:'7px 10px',border:'1.5px solid #8E44AD',borderRadius:7,fontSize:13,fontWeight:700,boxSizing:'border-box',marginBottom:6}}/>
-                  {parseFloat(item.isi_per_satuan)>0 ? (
-                    <div style={{fontSize:11,color:'#7B1FA2'}}>
-                      Harga per pcs: <b>{fmt(Math.round((item.harga||0)/parseFloat(item.isi_per_satuan)))}</b>
-                      <span style={{color:MT}}> (dari {fmt(item.harga||0)} per {item.satuan})</span>
-                    </div>
-                  ) : (
+                  {parseFloat(item.isi_per_satuan)>0 ? (()=>{
+                    const hargaSetelahDiskon = (item.harga||0) - applyTieredDiskon(item.harga||0, item.diskon_persen||'0');
+                    const adaDiskon = hargaSetelahDiskon !== (item.harga||0);
+                    return (
+                      <div style={{fontSize:11,color:'#7B1FA2'}}>
+                        Harga per pcs: <b>{fmt(Math.round(hargaSetelahDiskon/parseFloat(item.isi_per_satuan)))}</b>
+                        <span style={{color:MT}}> (dari {fmt(hargaSetelahDiskon)}{adaDiskon&&' setelah diskon'} per {item.satuan})</span>
+                      </div>
+                    );
+                  })() : (
                     <div style={{fontSize:10,color:RD}}>⚠️ Isi belum diisi — harga TIDAK akan otomatis dikonversi ke per-pcs kalau dikosongkan</div>
                   )}
                 </div>
