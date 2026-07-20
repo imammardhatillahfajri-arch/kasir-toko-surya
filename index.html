@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-JAMSTRUKFIX";
+const APP_VERSION = "v14.07.2026-TIMEZONEFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -384,7 +384,7 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
     (async()=>{
       setLoading(true);
       try {
-        const today    = new Date().toISOString().slice(0,10);
+        const today    = localDateStr();
         const weekAgo  = new Date(Date.now()-7*86400000).toISOString();
         const monthAgo = new Date(Date.now()-30*86400000).toISOString();
 
@@ -396,21 +396,21 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
           sbGetAll('purchase_orders',{order:'created_at',asc:false}),
         ]);
 
-        const todayTx      = txAll.filter(t=>t.created_at?.slice(0,10)===today);
+        const todayTx      = txAll.filter(t=>t.created_at && localDateStr(new Date(t.created_at))===today);
         const weekTx       = txAll.filter(t=>t.created_at>=weekAgo&&t.status==='Lunas');
         const monthTx      = txAll.filter(t=>t.created_at>=monthAgo&&t.status==='Lunas');
-        const todayRets    = rets.filter(r=>r.created_at?.slice(0,10)===today&&r.type==='dari_pelanggan');
+        const todayRets    = rets.filter(r=>r.created_at && localDateStr(new Date(r.created_at))===today&&r.type==='dari_pelanggan');
         const piutangTotal = txAll.filter(t=>t.status==='Piutang').reduce((s,t)=>s+t.total,0);
 
         // Omset per hari (7 hari terakhir)
         const hariMap = {};
         for(let i=6;i>=0;i--){
           const d = new Date(); d.setDate(d.getDate()-i);
-          const k = d.toISOString().slice(0,10);
+          const k = localDateStr(d);
           hariMap[k] = {date:k, omset:0, tx:0};
         }
         txAll.filter(t=>t.status==='Lunas'&&t.created_at>=weekAgo).forEach(t=>{
-          const k = t.created_at?.slice(0,10);
+          const k = t.created_at && localDateStr(new Date(t.created_at));
           if(hariMap[k]) { hariMap[k].omset+=t.total; hariMap[k].tx++; }
         });
         setOmsetPerHari(Object.values(hariMap));
@@ -426,7 +426,7 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
 
         // Piutang yang akan jatuh tempo (7 hari ke depan)
         const upcoming = new Date(); upcoming.setDate(upcoming.getDate()+7);
-        const upcomingStr = upcoming.toISOString().slice(0,10);
+        const upcomingStr = localDateStr(upcoming);
         const piutangJatuhTempo = txAll.filter(t=>
           t.status==='Piutang' && t.due_date && t.due_date<=upcomingStr
         ).sort((a,b)=>a.due_date?.localeCompare(b.due_date));
@@ -11305,6 +11305,16 @@ function buildStrukEscPos({toko, alamat, telp, invoice, tgl, jam, customer, kasi
 // ── Helper: pencarian pintar (multi-kata AND, abaikan simbol, toleran typo) ─
 // "kawat petak 1x1" cocok dengan 'KAWAT PETAK 1"X1"90CM'; "kabel" tetap ketemu walau diketik "kabel"/"kable"
 // ── Helper: qty desimal — toleran koma (2,5) maupun titik (2.5) ────────────
+// ── Helper: tanggal LOKAL (WIB) format YYYY-MM-DD — JANGAN pakai toISOString()
+// buat ini, karena toISOString() selalu UTC dan bakal salah nunjuk ke hari
+// kemarin selama jam 00:00-06:59 WIB (selisih UTC+7 dari Indonesia).
+function localDateStr(d=new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
 function parseQty(v) {
   if(typeof v === 'number') return v;
   const n = parseFloat(String(v??'').replace(',','.'));
