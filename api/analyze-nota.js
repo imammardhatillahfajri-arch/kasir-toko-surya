@@ -128,6 +128,55 @@ Aturan:
       return res.status(200).json(parsed);
     }
 
+    // ── MODE: BACA DAFTAR HARGA SUPPLIER (foto atau PDF, buat update harga massal) ──
+    if (body.priceListMode) {
+      const { base64, mediaType } = body;
+      const isPdf = mediaType === 'application/pdf';
+      const fileBlock = isPdf
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+        : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } };
+      const result = await callAnthropic({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4000,
+        messages: [{
+          role: 'user',
+          content: [
+            fileBlock,
+            { type: 'text', text: `Kamu adalah asisten toko listrik & bangunan di Indonesia. Ini adalah DAFTAR HARGA / PRICE LIST terbaru dari supplier — bisa berupa foto atau dokumen PDF berisi banyak baris produk dengan harga barunya. Baca SEMUA baris/item yang ada, jangan ada yang terlewat meskipun daftarnya panjang.
+
+Kembalikan HANYA JSON tanpa markdown:
+{
+  "supplier": "nama supplier/distributor jika tertera, kosongkan jika tidak ada",
+  "tanggal": "YYYY-MM-DD tanggal berlaku daftar harga jika tertera, kosongkan jika tidak ada",
+  "items": [
+    {"nama": "nama produk lengkap (TANPA embel-embel @NNN)", "harga": angka harga baru per satuan, "satuan": "pcs/roll/meter/dus/dll", "isi_per_satuan": angka atau null}
+  ]
+}
+
+Aturan: Angka tanpa titik/koma (Rp 15.000 = 15000). Kalau ada beberapa kolom harga per baris (misal harga grosir vs eceran, atau per beberapa level satuan), ambil harga yang paling relevan untuk PEMBELIAN toko dari supplier ini (biasanya kolom "Harga" atau kolom pertama, BUKAN harga jual/retail ke konsumen akhir kalau ada dua-duanya tertera).
+
+PENTING soal isi_per_satuan: sama seperti nota pembelian, kalau nama produk ada embel-embel "@NNN" (contoh "ELBOW 1/2\\" AW PRALON @225") artinya 1 satuan yang dijual (misal 1 DUS) isinya NNN pcs. Set isi_per_satuan = angka itu (contoh 225), dan JANGAN ikutkan "@NNN" di field nama. Kalau tidak ada pola ini, isi_per_satuan = null.` }
+          ]
+        }]
+      });
+
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return res.status(500).json({ error: data.error?.message || 'API error' });
+      }
+      const text = data.content?.[0]?.text || '';
+      const clean = text.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
+
+      let parsed;
+      try { parsed = JSON.parse(clean); }
+      catch(e) {
+        const m = clean.match(/[{][\s\S]*[}]/);
+        if(m) parsed = JSON.parse(m[0]);
+        else throw new Error('AI tidak bisa membaca daftar harga ini');
+      }
+      return res.status(200).json(parsed);
+    }
+
     // ── MODE: ANALYZE NOTA PEMBELIAN (foto faktur/nota dari supplier) ──
     const { base64, mediaType } = body;
     const result = await callAnthropic({
