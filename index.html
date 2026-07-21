@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-AIDISKONDETECT";
+const APP_VERSION = "v14.07.2026-MODEOFFLINE";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -160,6 +160,126 @@ async function sbDelete(table, id) {
     const { error } = await sb.from(table).delete().eq("id", id);
     if (error) throw new Error(error.message);
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MODE OFFLINE — cek koneksi beneran ke server (bukan cuma navigator.onLine,
+// itu bisa "true" walau internetnya sebenernya gak bisa nyampe server), simpan
+// transaksi ke antrian lokal kalau lagi putus, sinkron otomatis pas online lagi.
+// ═══════════════════════════════════════════════════════════════════════
+const OFFLINE_QUEUE_KEY = 'mykasir_pending_tx';
+
+async function cekKoneksiServer(timeoutMs=4000) {
+  if(!navigator.onLine) return false; // pasti offline, gak usah tes lagi
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(()=>ctrl.abort(), timeoutMs);
+    await fetch(`${SB_URL}/rest/v1/`, { method:'HEAD', headers:{apikey:SB_KEY}, signal: ctrl.signal });
+    clearTimeout(t);
+    return true;
+  } catch(e){ return false; }
+}
+
+function getPendingQueue() {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY)||'[]'); }
+  catch(e){ return []; }
+}
+function savePendingQueue(list) {
+  try { localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(list)); } catch(e){}
+  window.dispatchEvent(new Event('mykasir-queue-changed'));
+}
+function tambahKeAntrianOffline(txPayload) {
+  const list = getPendingQueue();
+  list.push({ ...txPayload, _localId: `LOCAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, _dibuatOffline: new Date().toISOString() });
+  savePendingQueue(list);
+}
+
+// Jalankan alur "checkout beneran" ke server untuk 1 transaksi (dipakai baik
+// saat online langsung, maupun saat sinkron ulang transaksi yang tertunda).
+// Sengaja best-effort soal stok: kalau ternyata stok udah keburu abis/minus
+// (misal kejual di device lain saat sama-sama offline), transaksi TETAP
+// disimpan apa adanya (karena di dunia nyata transaksinya emang udah kejadian)
+// — bukan ditolak — supaya gak ada uang/barang yang "hilang" dari pembukuan.
+async function commitTransaksiKeServer(payload) {
+  const { cart, total, paidNum, customer, metodeBayar, statusBayar, dueDate, invoiceNo, createdAtOverride } = payload;
+  const inv = invoiceNo || `INV-${Date.now()}`;
+  const dueDefault = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+  const change = paidNum - total;
+
+  const insertData = {
+    invoice_no:inv, customer:customer||'Umum', total,
+    paid:statusBayar==='Piutang'?0:paidNum,
+    change:statusBayar==='Piutang'?0:Math.max(0,change),
+    status:statusBayar, metode_bayar:metodeBayar||'Tunai',
+    due_date:statusBayar==='Piutang'?(dueDate||dueDefault):null,
+  };
+  if(createdAtOverride) insertData.created_at = createdAtOverride; // transaksi offline: pakai jam kejadian asli, bukan jam sync
+
+  const [tx] = await sbInsert('transactions', insertData);
+  await sbInsert('transaction_items', cart.map(item=>({
+    transaction_id:tx.id, product_id:item.id,
+    product_name:item.name, price:item.price, qty:item.qty,
+    satuan:item.unit||'pcs',
+  })));
+  if(statusBayar==='Lunas') await catatPembayaran({transaction_id:tx.id, amount:total, method:metodeBayar, note:`Penjualan ${inv}`});
+
+  const stokMinus = [];
+  await Promise.all(cart.map(async item=>{
+    const pid = item.id||item.product_id;
+    if(!pid || item.pakai_stok===false) return;
+    const qtyOut = item._unitBesar?(item.qty*(item._konversi||1)):item.qty;
+    const fresh = await sbGet('products',{eq:{id:pid}}).catch(()=>null);
+    const stokSekarang = fresh?.[0]?.stock ?? (item.stock||0);
+    const batches = await sbGet('stock_batches',{eq:{product_id:pid},order:'tanggal_masuk',asc:true}).catch(()=>[]);
+    const availBatches = (batches||[]).filter(b=>b.qty_sisa>0);
+    let qtyLeft = qtyOut;
+    for(const batch of availBatches) {
+      if(qtyLeft<=0) break;
+      const ambil = Math.min(batch.qty_sisa, qtyLeft);
+      await sbUpdate('stock_batches', batch.id, {qty_sisa: batch.qty_sisa - ambil}).catch(()=>{});
+      qtyLeft -= ambil;
+    }
+    const stokBaru = stokSekarang - qtyOut; // BOLEH minus — dicatat apa adanya, direkonsiliasi manual
+    if(stokBaru<0) stokMinus.push({name:item.name, kurang:Math.abs(stokBaru)});
+    await sbUpdate('products', pid, {stock: stokBaru});
+    await sbInsert('stock_logs',[{product_id:pid,type:'keluar',qty:qtyOut,stock_before:stokSekarang,stock_after:stokBaru,notes:createdAtOverride?'Penjualan FIFO (sync offline)':'Penjualan FIFO'}]).catch(()=>{});
+  }));
+
+  if(statusBayar==='Piutang') {
+    await sbInsert('debts',[{ type:'piutang', party_name:customer||'Umum', amount:total, paid:0, description:`Transaksi ${inv}`, status:'Belum Lunas' }]);
+  }
+
+  return { invoice: inv, txId: tx.id, stokMinus };
+}
+
+// Proses seluruh antrian offline secara berurutan (urut waktu kejadian).
+// Berhenti kalau ada yang gagal (biar sisanya gak ke-skip diam-diam),
+// sisanya nyoba lagi nanti (dipanggil ulang otomatis tiap ada perubahan koneksi).
+async function sinkronkanAntrianOffline(onProgress) {
+  const queue = getPendingQueue();
+  if(queue.length===0) return {synced:0, stokMinus:[]};
+  let synced = 0;
+  const semuaStokMinus = [];
+  const sisa = [...queue];
+  for(let i=0;i<queue.length;i++){
+    const item = queue[i];
+    try {
+      const hasil = await commitTransaksiKeServer({
+        cart: item.cart, total: item.total, paidNum: item.paidNum,
+        customer: item.customer, metodeBayar: item.metodeBayar, statusBayar: item.statusBayar,
+        dueDate: item.dueDate, invoiceNo: item.invoiceNo, createdAtOverride: item._dibuatOffline,
+      });
+      if(hasil.stokMinus?.length) semuaStokMinus.push(...hasil.stokMinus.map(s=>({...s, invoice:hasil.invoice})));
+      sisa.shift(); // sukses, buang dari antrian
+      synced++;
+      savePendingQueue(sisa);
+      if(onProgress) onProgress(synced, queue.length);
+    } catch(e){
+      console.error('[Sync Offline] Gagal sinkron, berhenti — sisanya dicoba lagi nanti:', e.message);
+      break; // stop di sini, jangan lompatin — urutan transaksi harus tetap benar
+    }
+  }
+  return {synced, stokMinus: semuaStokMinus};
 }
 
 
@@ -694,7 +814,7 @@ function Dashboard({onNavigate, currentUser, refreshKey}) {
 }
 
 
-function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, status, onNew, kasirName, txId, dueDate, createdAt}) {
+function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, status, onNew, kasirName, txId, dueDate, createdAt, offlinePending}) {
   const change    = paidNum - total;
   const now       = createdAt ? new Date(createdAt) : new Date();
   const tgl       = now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
@@ -1071,6 +1191,11 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
         <A4Content/>
       </div>
       <div style={{background:'#fff',borderRadius:'20px 20px 0 0',width:'100%',maxWidth:480,maxHeight:'92vh',display:'flex',flexDirection:'column',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        {offlinePending&&(
+          <div style={{background:'#FFF3D6',borderBottom:`1.5px solid ${OR}`,padding:'8px 16px',fontSize:11,color:'#7d4e00',fontWeight:600,textAlign:'center'}}>
+            📴 Transaksi tersimpan di HP ini — akan otomatis sinkron ke server saat internet tersambung lagi
+          </div>
+        )}
         {/* Header */}
         <div style={{background:isPiutang?OR:G,padding:'14px 20px',color:'#fff',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,position:'relative'}}>
           <div>
@@ -1486,95 +1611,73 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
     // Validasi qty tidak boleh 0
     const invalidQty = cart.filter(i=>parseQty(i.qty)<=0);
     if(invalidQty.length>0) return alert('Qty tidak boleh 0!\nProduk: '+invalidQty.map(i=>i.name).join(', '));
-    // Validasi stok cukup — cek FRESH ke database, agregat per produk
-    {
-      const needMap = {};
-      cart.forEach(i=>{
-        if(!i.id||i.pakai_stok===false) return;
-        const need = i._unitBesar?parseQty(i.qty)*(i._konversi||1):parseQty(i.qty);
-        needMap[i.id]=(needMap[i.id]||0)+need;
-      });
-      const ids = Object.keys(needMap);
-      if(ids.length){
-        let fresh = null;
-        try {
-          const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
-          const { data } = await sbc.from('products').select('id,name,stock,unit_kecil').in('id', ids);
-          fresh = data;
-        } catch(e){}
-        if(Array.isArray(fresh)&&fresh.length){
-          const kurang = fresh.filter(p=>needMap[p.id]>(p.stock||0))
-            .map(p=>`• ${p.name}: butuh ${needMap[p.id]}, stok tersisa ${p.stock||0} ${p.unit_kecil||'pcs'}`);
-          if(kurang.length) return alert('❌ Stok tidak cukup!\n\n'+kurang.join('\n')+'\n\nKurangi jumlah, atau update stok di halaman Edit Barang kalau stok fisik memang tersedia.');
-          // Segarkan snapshot stok keranjang agar pemotongan stok menulis angka yang benar
-          cart.forEach(i=>{ const f=fresh.find(p=>p.id===i.id); if(f) i.stock=f.stock; });
-        } else {
-          // Fallback (offline): validasi agregat pakai snapshot
-          const snap = {};
-          cart.forEach(i=>{ if(i.id&&!(i.id in snap)) snap[i.id]={name:i.name,stock:i.stock||0}; });
-          const kurang = Object.keys(needMap).filter(id=>needMap[id]>snap[id].stock).map(id=>snap[id].name);
-          if(kurang.length) return alert('Stok tidak cukup!\nProduk: '+kurang.join(', '));
-        }
-      }
-    }
     if(statusBayar==='Lunas' && (!paid||paidNum<total)) return alert('Nominal bayar kurang!');
     if(statusBayar==='Piutang' && !customer) return alert('Nama pelanggan wajib diisi untuk piutang!\nPilih pelanggan terdaftar agar piutang bisa ditagih.');
+
     setSaving(true);
-    try {
-      const inv = `INV-${Date.now()}`;
-      const dueDefault = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
-      const [tx] = await sbInsert('transactions',{
-        invoice_no:inv,
-        customer:customer||'Umum',
-        total,
-        paid:statusBayar==='Piutang'?0:paidNum,
-        change:statusBayar==='Piutang'?0:Math.max(0,change),
-        status:statusBayar,
-        metode_bayar:metodeBayar||'Tunai',
-        due_date:statusBayar==='Piutang'?(dueDate||dueDefault):null
-      });
-      await sbInsert('transaction_items',cart.map(item=>({
-        transaction_id:tx.id,product_id:item.id,
-        product_name:item.name,price:item.price,qty:item.qty,
-        satuan:item.unit||'pcs'
-      })));
-      // Catat arus kas masuk (basis tanggal uang diterima)
-      if(statusBayar==='Lunas') await catatPembayaran({transaction_id:tx.id, amount:total, method:metodeBayar, note:`Penjualan ${inv}`});
-      // FIFO: update stok dari batch terlama
-      await Promise.all(cart.map(async item=>{
-        const pid = item.id||item.product_id;
-        if(!pid) return;
-        if(item.pakai_stok===false) return; // produk non-stok: tidak potong stok
-        const qtyOut = item._unitBesar?(item.qty*(item._konversi||1)):item.qty;
-        // Ambil batches urut terlama
-        const batches = await sbGet('stock_batches',{eq:{product_id:pid},order:'tanggal_masuk',asc:true}).catch(()=>[]);
-        const availBatches = (batches||[]).filter(b=>b.qty_sisa>0);
-        let qtyLeft = qtyOut;
-        for(const batch of availBatches) {
-          if(qtyLeft<=0) break;
-          const ambil = Math.min(batch.qty_sisa, qtyLeft);
-          await sbUpdate('stock_batches', batch.id, {qty_sisa: batch.qty_sisa - ambil}).catch(()=>{});
-          qtyLeft -= ambil;
-        }
-        // Update total stok
-        await sbUpdate('products', pid, {stock: Math.max(0,(item.stock||0)-qtyOut)});
-        // Log FIFO keluar
-        await sbInsert('stock_logs',[{product_id:pid,type:'keluar',qty:qtyOut,stock_before:item.stock||0,stock_after:Math.max(0,(item.stock||0)-qtyOut),notes:'Penjualan FIFO'}]).catch(()=>{});
-      }));
+    const online = await cekKoneksiServer(3000);
 
-      // ── Otomatis catat ke Hutang Piutang kalau statusnya Piutang ──
-      if(statusBayar==='Piutang') {
-        await sbInsert('debts',[{
-          type: 'piutang',
-          party_name: customer||'Umum',
-          amount: total,
-          paid: 0,
-          description: `Transaksi ${inv}`,
-          status: 'Belum Lunas',
-        }]);
+    if(!online) {
+      // ── MODE OFFLINE: simpan transaksi ke antrian lokal HP, sinkron otomatis nanti ──
+      // Validasi stok cuma best-effort pakai data terakhir yang ke-cache di keranjang
+      // (gak bisa ngecek server), kasir tetap diperbolehkan lanjut kalau memang stok
+      // fisiknya ada — bukan ditolak, karena transaksi ini beneran terjadi di dunia nyata.
+      const needMap = {};
+      cart.forEach(i=>{ if(i.id&&i.pakai_stok!==false){ const need=i._unitBesar?parseQty(i.qty)*(i._konversi||1):parseQty(i.qty); needMap[i.id]=(needMap[i.id]||0)+need; } });
+      const kurang = Object.keys(needMap).filter(id=>{ const it=cart.find(i=>String(i.id)===String(id)); return it && needMap[id]>(it.stock||0); });
+      if(kurang.length>0) {
+        const lanjut = confirm(`⚠️ Sedang offline — stok terakhir yang tercatat di HP ini menunjukkan beberapa barang mungkin kurang:\n${kurang.map(id=>cart.find(i=>String(i.id)===String(id))?.name).join(', ')}\n\nTetap lanjutkan transaksi? (Kalau stok fisiknya memang ada, aman untuk lanjut)`);
+        if(!lanjut) { setSaving(false); return; }
       }
+      const inv = `INV-${Date.now()}`;
+      tambahKeAntrianOffline({
+        cart: cart.map(i=>({...i})), total, paidNum, customer, metodeBayar, statusBayar, dueDate, invoiceNo: inv,
+      });
+      // Optimis: kurangi stok di cache lokal biar transaksi berikutnya di device ini akurat
+      cart.forEach(item=>{
+        const pid = item.id||item.product_id;
+        if(!pid || item.pakai_stok===false) return;
+        const qtyOut = item._unitBesar?(item.qty*(item._konversi||1)):item.qty;
+        const cached = (window._cachedProducts||[]).find(p=>p.id===pid);
+        if(cached) cached.stock = Math.max(0,(cached.stock||0)-qtyOut);
+      });
+      if(statusBayar==='Piutang') {
+        // Piutang offline: dicatat juga di antrian sinkron transaksi (debts insert terjadi otomatis di commitTransaksiKeServer saat sync)
+      }
+      setDone({invoice:inv, offline:true});
+      setSaving(false);
+      return;
+    }
 
-      setDone({invoice:inv});
+    // ── MODE ONLINE: alur normal — cek stok fresh ke server dulu ──
+    const needMap = {};
+    cart.forEach(i=>{
+      if(!i.id||i.pakai_stok===false) return;
+      const need = i._unitBesar?parseQty(i.qty)*(i._konversi||1):parseQty(i.qty);
+      needMap[i.id]=(needMap[i.id]||0)+need;
+    });
+    const ids = Object.keys(needMap);
+    if(ids.length){
+      let fresh = null;
+      try {
+        const sbc = window._sb || (window._sb = window.supabase.createClient(SB_URL, SB_KEY));
+        const { data } = await sbc.from('products').select('id,name,stock,unit_kecil').in('id', ids);
+        fresh = data;
+      } catch(e){}
+      if(Array.isArray(fresh)&&fresh.length){
+        const kurang = fresh.filter(p=>needMap[p.id]>(p.stock||0))
+          .map(p=>`• ${p.name}: butuh ${needMap[p.id]}, stok tersisa ${p.stock||0} ${p.unit_kecil||'pcs'}`);
+        if(kurang.length){ setSaving(false); return alert('❌ Stok tidak cukup!\n\n'+kurang.join('\n')+'\n\nKurangi jumlah, atau update stok di halaman Edit Barang kalau stok fisik memang tersedia.'); }
+        cart.forEach(i=>{ const f=fresh.find(p=>p.id===i.id); if(f) i.stock=f.stock; });
+      }
+    }
+
+    try {
+      const hasil = await commitTransaksiKeServer({ cart, total, paidNum, customer, metodeBayar, statusBayar, dueDate });
+      if(hasil.stokMinus?.length) {
+        alert(`⚠️ Transaksi berhasil, tapi stok ${hasil.stokMinus.length} produk jadi minus (kemungkinan ada transaksi lain bersamaan):\n${hasil.stokMinus.map(s=>s.name).join(', ')}\n\nCek & sesuaikan stoknya di halaman Edit Barang.`);
+      }
+      setDone({invoice:hasil.invoice});
       reload();
     } catch(e){alert('Gagal: '+e.message);}
     setSaving(false);
@@ -1602,6 +1705,7 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
     <StrukSukses
       cart={cart} total={total} paidNum={statusBayar==='Piutang'?0:paidNum}
       invoice={done.invoice} customer={customer} metodeBayar={metodeBayar} status={statusBayar}
+      offlinePending={done.offline}
       onNew={()=>{clearCart();setDone(null);setPaid('');setCustomer('');setMetodeBayar('Tunai');setStatusBayar('Lunas');onSuccess();}}
       onPrint={handlePrint}
     />
@@ -3160,6 +3264,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
   if(view==='rapikan') return <RapikanSatuanTool onBack={()=>{setView('list');load();}}/>;
   if(view==='cekKonversi') return <CekKonversiTool onBack={()=>{setView('list');load();}}/>;
   if(view==='bersihkanSatuan') return <BersihkanSatuanGandaTool onBack={()=>{setView('list');load();}}/>;
+  if(view==='updateHargaSupplier') return <UpdateHargaSupplierAI onBack={()=>{setView('list');load();}}/>;
   if(view==='pelanggan' && selectedProduct)   return <PelangganBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
   if(view==='supplier' && selectedProduct)    return <SupplierBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
 
@@ -3214,6 +3319,11 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
           style={{padding:"11px 14px",background:'#FFF3D6',color:OR,border:`1.5px solid ${OR}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
           title="Bersihkan Data Satuan Ganda">
           🔁
+        </button>
+        <button onClick={()=>setView('updateHargaSupplier')}
+          style={{padding:"11px 14px",background:'#E3F2FD',color:'#1976D2',border:'1.5px solid #3498DB',borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
+          title="Update Harga dari Supplier (AI)">
+          📋
         </button>
       </div>
       {bulkMode&&(
@@ -3615,6 +3725,251 @@ function CekKonversiTool({onBack}) {
 }
 
 // ── Alat Bersihkan Data Satuan Ganda — cari produk yang punya 2 sistem satuan sekaligus ─
+// ── Alat Update Harga dari Daftar Harga Supplier (AI) — foto atau PDF ──────
+function UpdateHargaSupplierAI({onBack}) {
+  const [step, setStep] = useState('upload'); // upload | loading | review
+  const [file, setFile] = useState(null);
+  const [filePreview, setFilePreview] = useState(null);
+  const [isPdf, setIsPdf] = useState(false);
+  const [error, setError] = useState('');
+  const [items, setItems] = useState([]); // hasil ekstrak + auto-match
+  const [supplierName, setSupplierName] = useState('');
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState({done:0,total:0});
+
+  const handleFile = (f) => {
+    if(!f) return;
+    const isPdfFile = f.type==='application/pdf';
+    if(!f.type.startsWith('image/') && !isPdfFile) return setError('File harus berupa gambar atau PDF!');
+    if(f.size > 15*1024*1024) return setError('Ukuran file maksimal 15MB!');
+    setFile(f); setIsPdf(isPdfFile); setError('');
+    if(isPdfFile) { setFilePreview(null); }
+    else { const reader = new FileReader(); reader.onload = e=>setFilePreview(e.target.result); reader.readAsDataURL(f); }
+  };
+
+  const analyze = async() => {
+    if(!file) return;
+    setStep('loading'); setError('');
+    try {
+      const base64 = await new Promise((res,rej)=>{
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result.split(',')[1]);
+        reader.onerror = rej;
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch('/api/analyze-nota', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ priceListMode: true, base64, mediaType: file.type })
+      });
+      if(!response.ok) {
+        const errData = await response.json().catch(()=>({error:'Server error'}));
+        throw new Error(errData.error || `Error ${response.status}`);
+      }
+      const parsed = await response.json();
+      setSupplierName(parsed.supplier||'');
+
+      // Auto-match tiap item ke produk existing (skor tertinggi, ambang batas wajar)
+      const allProducts = window._cachedProducts?.length ? window._cachedProducts : await sbGetAll('products',{order:'name'});
+      window._cachedProducts = allProducts;
+
+      const matched = (parsed.items||[]).map((it,idx)=>{
+        const nama = (it.nama||'').toUpperCase();
+        let best = null, bestScore = -999;
+        allProducts.forEach(p=>{
+          const s = productMatchScore(nama, p.name);
+          if(s>bestScore){ bestScore=s; best=p; }
+        });
+        const isMatch = best && bestScore>=40;
+        const isiPerSatuan = parseFloat(it.isi_per_satuan)||0;
+        return {
+          id: idx,
+          nama,
+          hargaBaru: parseInt(it.harga)||0,
+          satuan: (it.satuan||'pcs').toUpperCase(),
+          isi_per_satuan: isiPerSatuan>1 ? isiPerSatuan : '',
+          tipe_unit: isiPerSatuan>1 ? 'besar' : 'kecil',
+          product_id: isMatch ? best.id : null,
+          matched_name: isMatch ? best.name : null,
+          harga_lama: isMatch ? (best.buy_price||0) : null,
+        };
+      });
+      setItems(matched);
+      setSelectedIds(new Set(matched.filter(m=>m.product_id).map(m=>m.id)));
+      setStep('review');
+    } catch(e){ setError(e.message); setStep('upload'); }
+  };
+
+  const hargaBaruEfektif = (item) => {
+    const k = parseFloat(item.isi_per_satuan)||0;
+    if(item.tipe_unit==='besar' && k>1) return Math.round((item.hargaBaru||0)/k);
+    return item.hargaBaru||0;
+  };
+
+  const toggleSelect = (id) => setSelectedIds(prev=>{
+    const next = new Set(prev);
+    if(next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const gantiProduk = (id, productId) => {
+    const prod = (window._cachedProducts||[]).find(p=>p.id===parseInt(productId));
+    setItems(prev=>prev.map(it=>it.id===id?{...it, product_id: prod?prod.id:null, matched_name: prod?prod.name:null, harga_lama: prod?(prod.buy_price||0):null}:it));
+    if(productId) setSelectedIds(prev=>new Set(prev).add(id));
+  };
+
+  const terapkan = async() => {
+    const targets = items.filter(it=>selectedIds.has(it.id) && it.product_id);
+    if(targets.length===0) return alert('Pilih minimal 1 produk yang sudah cocok dengan database!');
+    if(!confirm(`Update Harga Beli ${targets.length} produk sekaligus dari daftar harga ini?`)) return;
+    setSaving(true);
+    setProgress({done:0,total:targets.length});
+    try {
+      for(let i=0;i<targets.length;i++){
+        await sbUpdate('products', targets[i].product_id, {buy_price: hargaBaruEfektif(targets[i])});
+        setProgress({done:i+1,total:targets.length});
+      }
+      alert(`✅ Harga Beli ${targets.length} produk berhasil diupdate!`);
+      onBack();
+    } catch(e){ alert(`Gagal di tengah proses: ${e.message}\n(${progress.done}/${targets.length} berhasil sebelum error)`); }
+    setSaving(false);
+  };
+
+  const matchedCount = items.filter(it=>it.product_id).length;
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto',paddingBottom:100}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>📋 Update Harga dari Supplier (AI)</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:16}}>Upload foto atau PDF daftar harga terbaru dari supplier — AI baca semua item, cocokkan ke produk di database, lalu update Harga Beli sekaligus setelah dikonfirmasi.</div>
+
+      {step==='upload' && (
+        <>
+          {error&&<div style={{background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,padding:'8px 12px',fontSize:12,color:RD,marginBottom:12}}>{error}</div>}
+          {filePreview && (
+            <img src={filePreview} style={{width:'100%',maxHeight:280,objectFit:'contain',borderRadius:10,marginBottom:10,background:'#F5F6FA'}}/>
+          )}
+          {isPdf&&file && (
+            <div style={{background:'#F5F6FA',borderRadius:10,padding:16,marginBottom:10,textAlign:'center'}}>
+              <div style={{fontSize:32}}>📄</div>
+              <div style={{fontWeight:700,fontSize:13,marginTop:4}}>{file.name}</div>
+              <div style={{fontSize:11,color:MT}}>{(file.size/1024/1024).toFixed(1)} MB</div>
+            </div>
+          )}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+            <label style={{padding:'16px 10px',background:GL,border:`1.5px solid ${G}`,borderRadius:12,textAlign:'center',cursor:'pointer'}}>
+              <div style={{fontSize:24}}>📷</div>
+              <div style={{fontWeight:700,fontSize:12,color:GD,marginTop:4}}>Foto Daftar Harga</div>
+              <input type="file" accept="image/*" capture="environment" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+            </label>
+            <label style={{padding:'16px 10px',background:'#FFF3D6',border:`1.5px solid ${OR}`,borderRadius:12,textAlign:'center',cursor:'pointer'}}>
+              <div style={{fontSize:24}}>📄</div>
+              <div style={{fontWeight:700,fontSize:12,color:OR,marginTop:4}}>Upload PDF</div>
+              <input type="file" accept="application/pdf,image/*" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+            </label>
+          </div>
+          {file&&(
+            <button onClick={analyze} style={{width:'100%',padding:13,background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
+              🤖 Baca Daftar Harga dengan AI
+            </button>
+          )}
+        </>
+      )}
+
+      {step==='loading' && (
+        <div style={{textAlign:'center',padding:40}}>
+          <Loading/>
+          <div style={{fontSize:13,color:MT,marginTop:10}}>AI sedang membaca daftar harga... bisa agak lama kalau daftarnya panjang.</div>
+        </div>
+      )}
+
+      {step==='review' && (
+        <>
+          <div style={{background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:10,padding:'10px 12px',marginBottom:12,fontSize:12,color:'#1976D2'}}>
+            {supplierName&&<div style={{fontWeight:700,marginBottom:2}}>Supplier: {supplierName}</div>}
+            📦 {items.length} item terbaca — <b>{matchedCount} cocok otomatis</b> ke produk di database, {items.length-matchedCount} perlu dicocokkan manual.
+          </div>
+
+          {items.map(item=>{
+            const efektif = hargaBaruEfektif(item);
+            const naik = item.harga_lama!=null && efektif > item.harga_lama;
+            const turun = item.harga_lama!=null && efektif < item.harga_lama;
+            return (
+              <div key={item.id} style={{background:item.product_id?'#fff':'#FFF8E1',border:item.product_id?'1px solid #eee':`1.5px solid ${OR}`,borderRadius:10,padding:12,marginBottom:8}}>
+                <div style={{display:'flex',alignItems:'flex-start',gap:8,marginBottom:6}}>
+                  {item.product_id&&(
+                    <input type="checkbox" checked={selectedIds.has(item.id)} onChange={()=>toggleSelect(item.id)}
+                      style={{width:18,height:18,accentColor:G,flexShrink:0,marginTop:2}}/>
+                  )}
+                  <div style={{flex:1,fontWeight:700,fontSize:13}}>{item.nama}</div>
+                </div>
+
+                {item.product_id ? (
+                  <div style={{fontSize:11,color:GD,marginBottom:6}}>✅ Cocok dengan: {item.matched_name}</div>
+                ) : (
+                  <>
+                    <div style={{fontSize:11,color:OR,marginBottom:4}}>⚠️ Belum ketemu produknya di database</div>
+                    <select onChange={e=>gantiProduk(item.id, e.target.value)} defaultValue=""
+                      style={{width:'100%',padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,marginBottom:6,background:'#fff'}}>
+                      <option value="">-- Cocokkan ke produk --</option>
+                      {(window._cachedProducts||[]).slice(0,500).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </>
+                )}
+
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:6}}>
+                  <div>
+                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Harga Baru ({item.satuan})</label>
+                    <input type="number" value={item.hargaBaru} onChange={e=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,hargaBaru:parseInt(e.target.value)||0}:it))}
+                      style={{width:'100%',padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Satuan</label>
+                    <input value={item.satuan} onChange={e=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,satuan:e.target.value.toUpperCase()}:it))}
+                      style={{width:'100%',padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                  </div>
+                </div>
+
+                <div style={{display:'flex',gap:6,marginBottom:6}}>
+                  {['kecil','besar'].map(t=>(
+                    <button key={t} onClick={()=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,tipe_unit:t}:it))}
+                      style={{flex:1,padding:'5px 4px',border:`1.5px solid ${item.tipe_unit===t?(t==='besar'?'#8E44AD':G):'#eee'}`,borderRadius:7,background:item.tipe_unit===t?(t==='besar'?'#F3E5F5':GL):'#fff',color:item.tipe_unit===t?(t==='besar'?'#8E44AD':GD):MT,cursor:'pointer',fontSize:10,fontWeight:700}}>
+                      {t==='besar'?'🎁 Unit Besar':'📦 Unit Kecil'}
+                    </button>
+                  ))}
+                </div>
+                {item.tipe_unit==='besar'&&(
+                  <div style={{background:'#F3E5F5',borderRadius:7,padding:'6px 8px',marginBottom:6}}>
+                    <label style={{fontSize:10,color:'#7B1FA2',fontWeight:600,display:'block',marginBottom:2}}>Isi per {item.satuan} (berapa pcs?)</label>
+                    <input type="number" value={item.isi_per_satuan} placeholder="mis. 225"
+                      onChange={e=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,isi_per_satuan:e.target.value}:it))}
+                      style={{width:'100%',padding:'6px 8px',border:'1.5px solid #8E44AD',borderRadius:6,fontSize:12,fontWeight:700,boxSizing:'border-box'}}/>
+                  </div>
+                )}
+
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#F5F6FA',borderRadius:7,padding:'6px 10px'}}>
+                  <span style={{fontSize:11,color:MT}}>{item.harga_lama!=null?`Lama: ${fmt(item.harga_lama)}`:'Belum ada di database'}</span>
+                  <span style={{fontSize:13,fontWeight:800,color:naik?RD:turun?GD:TX}}>
+                    {naik?'▲':turun?'▼':''} {fmt(efektif)}/pcs
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+
+          <div style={{position:'fixed',bottom:64,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,maxWidth:600,margin:'0 auto'}}>
+            {saving&&<div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:8}}>⏳ Mengupdate {progress.done}/{progress.total}...</div>}
+            <button onClick={terapkan} disabled={saving}
+              style={{width:'100%',padding:13,background:saving?MT:G,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
+              {saving?'⏳ Mengupdate...':`💾 Update Harga Beli — ${selectedIds.size} Produk`}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function BersihkanSatuanGandaTool({onBack}) {
   const [loading, setLoading] = useState(true);
   const [affected, setAffected] = useState([]); // {product, unitEntries}
@@ -14639,13 +14994,27 @@ function useNetworkStatus() {
   return {online, slow};
 }
 
-function NetworkStatusBanner() {
+function NetworkStatusBanner({pendingCount=0, syncing=false, onSyncNow}) {
   const {online, slow} = useNetworkStatus();
-  if(online && !slow) return null;
+  if(online && !slow && pendingCount===0) return null;
+  let bg = OR, text = '🟡 Koneksi lambat — beberapa aksi mungkin butuh waktu lebih lama';
+  if(!online) {
+    bg = RD;
+    text = pendingCount>0
+      ? `🔴 Offline — transaksi tetap bisa diproses, ${pendingCount} tersimpan lokal menunggu sinkron`
+      : '🔴 Tidak ada koneksi internet — transaksi baru akan disimpan sementara di HP';
+  } else if(syncing) {
+    bg = '#3498DB';
+    text = `🔄 Menyinkronkan ${pendingCount} transaksi tertunda...`;
+  } else if(pendingCount>0) {
+    bg = OR;
+    text = `🟠 ${pendingCount} transaksi menunggu sinkron — tap untuk sinkron sekarang`;
+  }
+  const clickable = online && pendingCount>0 && !syncing && onSyncNow;
   return (
-    <div style={{position:'fixed',top:0,left:0,right:0,zIndex:9999,textAlign:'center',padding:'6px 12px',fontSize:12,fontWeight:700,color:'#fff',
-      background: online ? OR : RD}}>
-      {online ? '🟡 Koneksi lambat — beberapa aksi mungkin butuh waktu lebih lama' : '🔴 Tidak ada koneksi internet — transaksi & data baru tidak akan tersimpan'}
+    <div onClick={clickable?onSyncNow:undefined} style={{position:'fixed',top:0,left:0,right:0,zIndex:9999,textAlign:'center',padding:'6px 12px',fontSize:12,fontWeight:700,color:'#fff',
+      background: bg, cursor: clickable?'pointer':'default'}}>
+      {text}
     </div>
   );
 }
@@ -14681,6 +15050,39 @@ function App() {
   const [currentUser, setCurrentUser] = useState(()=>getSession());
   const [refreshKey, setRefreshKey]   = useState(0);
   const [targetProductId, setTargetProductId] = useState(null);
+  const {online: isOnline} = useNetworkStatus();
+  const [pendingCount, setPendingCount] = useState(()=>getPendingQueue().length);
+  const [syncing, setSyncing] = useState(false);
+
+  // Pantau jumlah antrian transaksi offline
+  useEffect(()=>{
+    const upd = ()=>setPendingCount(getPendingQueue().length);
+    upd();
+    window.addEventListener('mykasir-queue-changed', upd);
+    return ()=>window.removeEventListener('mykasir-queue-changed', upd);
+  },[]);
+
+  // Begitu online lagi & ada antrian, otomatis sinkron
+  const jalankanSync = useCallback(async()=>{
+    if(syncing) return;
+    setSyncing(true);
+    try {
+      const {synced, stokMinus} = await sinkronkanAntrianOffline();
+      if(synced>0) {
+        setRefreshKey(k=>k+1);
+        if(stokMinus.length>0) {
+          alert(`✅ ${synced} transaksi berhasil disinkronkan.\n\n⚠️ Perhatian: ${stokMinus.length} produk kemungkinan stoknya jadi MINUS karena terjual bersamaan di lebih dari 1 perangkat saat offline:\n\n${stokMinus.map(s=>`• ${s.name} (${s.invoice})`).join('\n')}\n\nMohon dicek & disesuaikan stoknya secara manual di halaman Edit Barang.`);
+        } else {
+          alert(`✅ ${synced} transaksi berhasil disinkronkan ke server.`);
+        }
+      }
+    } catch(e){ console.error('[Sync] error:', e.message); }
+    setSyncing(false);
+  },[syncing]);
+
+  useEffect(()=>{
+    if(isOnline && pendingCount>0 && !syncing) jalankanSync();
+  },[isOnline, pendingCount]); // eslint-disable-line
 
   // Validasi sesi login: Supabase Auth adalah sumber kebenaran.
   // Kalau token auth tidak ada/kadaluarsa, profil lokal dianggap tidak sah.
@@ -14767,7 +15169,7 @@ function App() {
   };
 
   return <div style={{minHeight:"100vh",background:GR,fontFamily:"'Segoe UI',system-ui,sans-serif"}}>
-    <NetworkStatusBanner/>
+    <NetworkStatusBanner pendingCount={pendingCount} syncing={syncing} onSyncNow={jalankanSync}/>
     <Sidebar active={page} onNavigate={setPage} open={sidebarOpen} onClose={()=>setSidebarOpen(false)} currentUser={currentUser} onLogout={handleLogout}/>
     <div>
       <TopBar title={PAGE_TITLES[page]} onMenuToggle={()=>setSidebarOpen(o=>!o)}/>
