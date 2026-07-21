@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-MODEOFFLINE";
+const APP_VERSION = "v14.07.2026-GALERIOPSI";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3856,16 +3856,21 @@ function UpdateHargaSupplierAI({onBack}) {
               <div style={{fontSize:11,color:MT}}>{(file.size/1024/1024).toFixed(1)} MB</div>
             </div>
           )}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-            <label style={{padding:'16px 10px',background:GL,border:`1.5px solid ${G}`,borderRadius:12,textAlign:'center',cursor:'pointer'}}>
-              <div style={{fontSize:24}}>📷</div>
-              <div style={{fontWeight:700,fontSize:12,color:GD,marginTop:4}}>Foto Daftar Harga</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:12}}>
+            <label style={{padding:'14px 6px',background:GL,border:`1.5px solid ${G}`,borderRadius:12,textAlign:'center',cursor:'pointer'}}>
+              <div style={{fontSize:22}}>📷</div>
+              <div style={{fontWeight:700,fontSize:11,color:GD,marginTop:4}}>Kamera</div>
               <input type="file" accept="image/*" capture="environment" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
             </label>
-            <label style={{padding:'16px 10px',background:'#FFF3D6',border:`1.5px solid ${OR}`,borderRadius:12,textAlign:'center',cursor:'pointer'}}>
-              <div style={{fontSize:24}}>📄</div>
-              <div style={{fontWeight:700,fontSize:12,color:OR,marginTop:4}}>Upload PDF</div>
-              <input type="file" accept="application/pdf,image/*" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+            <label style={{padding:'14px 6px',background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:12,textAlign:'center',cursor:'pointer'}}>
+              <div style={{fontSize:22}}>🖼️</div>
+              <div style={{fontWeight:700,fontSize:11,color:'#1976D2',marginTop:4}}>Galeri</div>
+              <input type="file" accept="image/*" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+            </label>
+            <label style={{padding:'14px 6px',background:'#FFF3D6',border:`1.5px solid ${OR}`,borderRadius:12,textAlign:'center',cursor:'pointer'}}>
+              <div style={{fontSize:22}}>📄</div>
+              <div style={{fontWeight:700,fontSize:11,color:OR,marginTop:4}}>PDF</div>
+              <input type="file" accept="application/pdf" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
             </label>
           </div>
           {file&&(
