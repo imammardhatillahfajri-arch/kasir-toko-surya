@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-EDITMATCHHARGA";
+const APP_VERSION = "v14.07.2026-RAWBTPRINT";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -1323,6 +1323,12 @@ function StrukSukses({cart, total, paidNum, invoice, customer, metodeBayar, stat
                 <div style={{fontSize:18,marginBottom:3}}>🖨️</div>
                 <div style={{fontWeight:700,fontSize:11,color:GD}}>Cetak A5</div>
                 <div style={{fontSize:9,color:MT,marginTop:1}}>Printer biasa (WiFi/USB)</div>
+              </button>
+              <button onClick={()=>cetakViaRawBT({cart, total, paidNum, invoice, customer, status, kasirName, dueDate, createdAt})}
+                style={{gridColumn:'span 2',padding:'10px 6px',background:'#F3E5F5',border:'1.5px solid #8E44AD',borderRadius:12,cursor:'pointer',textAlign:'center'}}>
+                <div style={{fontSize:18,marginBottom:3}}>⚡</div>
+                <div style={{fontWeight:700,fontSize:11,color:'#7B1FA2'}}>Cetak Langsung (RawBT)</div>
+                <div style={{fontSize:9,color:MT,marginTop:1}}>Tanpa dialog print — butuh app RawBT terpasang</div>
               </button>
             </div>
           )}
@@ -5690,6 +5696,58 @@ function printStrukA5({cart, total, paidNum, invoice, customer, metodeBayar, sta
     <div style="text-align:center;margin-top:20px"><button onclick="window.print()" style="padding:10px 28px;background:#1a472a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">🖨️ Print Nota</button></div>
   </body></html>`);
   w.document.close();
+}
+
+// ── Cetak Langsung via RawBT (app pihak ketiga, jembatani printer thermal
+// Bluetooth SPP/Classic) — kirim teks struk lewat Android Intent URL, TANPA
+// dialog print sama sekali. Butuh RawBT sudah terpasang & printer sudah
+// dipasangkan di app RawBT itu sendiri (sekali setup di awal).
+function buildStrukTeksPolos({cart, total, paidNum, invoice, customer, status, kasirName, dueDate, createdAt}) {
+  const tokoNama    = window.TOKO_NAMA||'SURYA LISTRIK';
+  const tokoAlamat  = window.TOKO_ALAMAT||'';
+  const tokoTelp    = window.TOKO_TELP||'';
+  const isPiutang   = status==='Piutang';
+  const now = createdAt ? new Date(createdAt) : new Date();
+  const tgl = now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  const jam = now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+  const change = (paidNum||0)-(total||0);
+  const jatusTempo = _strukJatuhTempo(dueDate, now);
+  const W = 32; // lebar kertas 58mm ala karakter
+  const garis = '-'.repeat(W)+'\n';
+  const rp = (n) => `Rp ${(n||0).toLocaleString('id-ID')}`;
+  const dua = (l,r) => { l=String(l); r=String(r); const sp=Math.max(1,W-l.length-r.length); return l+' '.repeat(sp)+r+'\n'; };
+
+  let t = '';
+  t += tokoNama+'\n';
+  if(tokoAlamat) t += tokoAlamat+'\n';
+  if(tokoTelp) t += 'Telp: '+tokoTelp+'\n';
+  t += garis;
+  t += 'No: '+invoice+'\n';
+  t += tgl+' - '+jam+'\n';
+  if(customer) t += 'Pelanggan: '+customer+'\n';
+  if(kasirName) t += 'Kasir: '+kasirName+'\n';
+  if(isPiutang) t += 'Jatuh Tempo: '+jatusTempo+'\n';
+  t += garis;
+  (cart||[]).forEach(item=>{
+    t += item.name+'\n';
+    t += dua(`${item.qty} ${item.unit||'pcs'} x ${rp(item.price)}`, rp((item.price||0)*(item.qty||0)));
+  });
+  t += garis;
+  t += dua('TOTAL', rp(total));
+  if(paidNum>0) t += dua('Bayar', rp(paidNum));
+  if(change>0) t += dua('Kembali', rp(change));
+  if(isPiutang) t += dua('Sisa Hutang', rp((total||0)-(paidNum||0)));
+  t += dua('Status', status);
+  t += garis;
+  t += (window.STRUK_FOOTER||'Terima kasih telah berbelanja!')+'\n\n\n';
+  return t;
+}
+
+function cetakViaRawBT(data) {
+  const teks = buildStrukTeksPolos(data);
+  const encoded = encodeURI(teks);
+  const intentUrl = `intent:${encoded}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
+  window.location.href = intentUrl;
 }
 
 function printStrukThermal({cart, total, paidNum, invoice, customer, status, kasirName, dueDate, createdAt}) {
