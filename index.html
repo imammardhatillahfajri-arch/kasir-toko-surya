@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-LINKPIUTANG";
+const APP_VERSION = "v14.07.2026-LINKHUTANGSUP";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -5691,9 +5691,9 @@ function SupplierDetailView({supplier, onBack, onEdit, onDelete, onOpenHutang}) 
   if(subview){
     const isHutang = subview==='hutang';
     const list = isHutang
-      ? [...pos.filter(p=>p.bayar==='Hutang').map(p=>({id:'po-'+p.id, label:'PO-'+p.id, tgl:p.created_at?.slice(0,10), nilai:Math.max(0,(p.total||0)-(p.paid||0)), status:'Belum Lunas'})),
-         ...hutangs.filter(h=>h.status!=='Lunas').map(h=>({id:'d-'+h.id, label:h.description||'Hutang manual', tgl:h.created_at?.slice(0,10), nilai:Math.max(0,(h.amount||0)-(h.paid||0)), status:'Belum Lunas'}))]
-      : pos.map(p=>({id:'po-'+p.id, label:'PO-'+p.id, tgl:p.created_at?.slice(0,10), nilai:p.total||0, status:p.bayar==='Lunas'?'Lunas':'Hutang'}));
+      ? [...pos.filter(p=>p.bayar==='Hutang').map(p=>({id:'po-'+p.id, poId:p.id, label:'PO-'+p.id, tgl:p.created_at?.slice(0,10), nilai:Math.max(0,(p.total||0)-(p.paid||0)), status:'Belum Lunas'})),
+         ...hutangs.filter(h=>h.status!=='Lunas').map(h=>({id:'d-'+h.id, debtId:h.id, label:h.description||'Hutang manual', tgl:h.created_at?.slice(0,10), nilai:Math.max(0,(h.amount||0)-(h.paid||0)), status:'Belum Lunas'}))]
+      : pos.map(p=>({id:'po-'+p.id, poId:p.id, label:'PO-'+p.id, tgl:p.created_at?.slice(0,10), nilai:p.total||0, status:p.bayar==='Lunas'?'Lunas':'Hutang'}));
     return (
       <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
         <button onClick={()=>setSubview(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali ke {supplier.name}</button>
@@ -5701,10 +5701,10 @@ function SupplierDetailView({supplier, onBack, onEdit, onDelete, onOpenHutang}) 
         <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
           {list.length===0 && <div style={{textAlign:'center',padding:24,color:MT,fontSize:13}}>Belum ada data.</div>}
           {list.map((it,i)=>{
-            const bisaLink = isHutang && onOpenHutang;
+            const bisaLink = onOpenHutang && (it.poId||it.debtId);
             return (
               <div key={it.id}
-                onClick={bisaLink?()=>onOpenHutang({party:supplier.name}):undefined}
+                onClick={bisaLink?()=>onOpenHutang({party:supplier.name, poId:it.poId, debtId:it.debtId}):undefined}
                 style={{padding:'12px 16px',borderBottom:i<list.length-1?'1px solid #f0f0f0':'none',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:bisaLink?'pointer':'default'}}>
                 <div>
                   <div style={{fontWeight:700,fontSize:13}}>{it.label}</div>
@@ -6835,6 +6835,22 @@ function HutangPiutang({initialTarget, onConsumeTarget}={}) {
     targetConsumed.current = true;
     if(initialTarget.tab==='hutang'){
       if(initialTarget.party) setSelSupplierHutang(initialTarget.party);
+      // Langsung buka transaksi spesifiknya (level 3) kalau ada id-nya
+      if(initialTarget.poId){
+        const po = poHutang.find(p=>p.id===initialTarget.poId);
+        if(po){
+          const sisa=(po.total||0)-(po.paid||0);
+          const isLunas=po.bayar==='Lunas'||sisa<=0;
+          openHutangTx({source:'po', id:po.id, key:'po-'+po.id, supplier:po.supplier||'Tanpa Nama', total:po.total||0, paid:po.paid||0, sisa:Math.max(0,sisa), due_date:po.due_date, created_at:po.created_at, status:isLunas?'Lunas':'Belum Lunas', raw:po});
+        }
+      } else if(initialTarget.debtId){
+        const d = debts.find(x=>x.id===initialTarget.debtId&&x.type==='hutang');
+        if(d){
+          const sisa=(d.amount||0)-(d.paid||0);
+          const isLunas=d.status==='Lunas'||sisa<=0;
+          openHutangTx({source:'manual', id:d.id, key:'debt-'+d.id, supplier:d.party_name||'Tanpa Nama', total:d.amount||0, paid:d.paid||0, sisa:Math.max(0,sisa), due_date:d.due_date, created_at:d.created_at, status:isLunas?'Lunas':'Belum Lunas', description:d.description, raw:d});
+        }
+      }
     } else if(initialTarget.party){
       // Bangun objek customer dengan bentuk yang sama seperti customerMap
       const todayD = localDateStr();
