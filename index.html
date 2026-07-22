@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-HUTANGLUNASFIX";
+const APP_VERSION = "v14.07.2026-KONTAKDETAIL";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -5321,6 +5321,128 @@ function LogBarangView({product, onBack}) {
 
 // ── MANAJEMEN PELANGGAN
 // ── MANAJEMEN PELANGGAN ────────────────────────────────────────────────────
+// ── Helper bersama untuk manajemen kontak (pelanggan & supplier) ────────────
+function inisialNama(name) {
+  return (name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase();
+}
+function waLink(phone) {
+  let p = String(phone||'').replace(/[^0-9]/g,'');
+  if(p.startsWith('0')) p = '62'+p.slice(1);
+  return 'https://wa.me/'+p;
+}
+
+// ── Detail Pelanggan ala Kasir Pintar: profil + aksi kontak + statistik ─────
+function PelangganDetailView({customer, onBack, onEdit, onDelete}) {
+  const [txs, setTxs] = useState([]);
+  const [piutangs, setPiutangs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [subview, setSubview] = useState(null); // null | 'piutang' | 'transaksi'
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try {
+        const [t, d] = await Promise.all([
+          sbGet('transactions',{eq:{customer:customer.name},order:'created_at',asc:false}).catch(()=>[]),
+          sbGet('debts',{eq:{party_name:customer.name},order:'created_at',asc:false}).catch(()=>[]),
+        ]);
+        setTxs(t||[]);
+        setPiutangs((d||[]).filter(x=>x.type==='piutang'));
+      } catch(e){}
+      setLoading(false);
+    })();
+  },[customer.id]);
+
+  const sisaPiutang   = piutangs.filter(p=>p.status!=='Lunas').reduce((s,p)=>s+Math.max(0,(p.amount||0)-(p.paid||0)),0);
+  const totPendapatan = txs.reduce((s,t)=>s+(t.status==='Lunas'?(t.total||0):(t.paid||0)),0);
+
+  if(subview){
+    const isPiutang = subview==='piutang';
+    const list = isPiutang ? piutangs : txs;
+    return (
+      <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+        <button onClick={()=>setSubview(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali ke {customer.name}</button>
+        <h3 style={{margin:'0 0 12px',fontSize:16,fontWeight:800}}>{isPiutang?'💰 Riwayat Piutang':'🧾 Riwayat Transaksi'}</h3>
+        <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+          {list.length===0 && <div style={{textAlign:'center',padding:24,color:MT,fontSize:13}}>Belum ada data.</div>}
+          {list.map((it,i)=>(
+            <div key={it.id} style={{padding:'12px 16px',borderBottom:i<list.length-1?'1px solid #f0f0f0':'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:13}}>{isPiutang?(it.description||'Piutang'):(it.invoice_no||'-')}</div>
+                <div style={{fontSize:11,color:MT,marginTop:2}}>{it.created_at?.slice(0,10)}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontWeight:800,fontSize:14,color:isPiutang?(it.status==='Lunas'?GD:RD):GD}}>{fmt(isPiutang?(it.amount||0):(it.total||0))}</div>
+                <div style={{fontSize:10,fontWeight:700,color:(isPiutang?it.status==='Lunas':it.status==='Lunas')?GD:OR}}>{it.status}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+
+      {/* Profil */}
+      <div style={{background:'#fff',borderRadius:14,padding:'22px 16px',textAlign:'center',boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14,position:'relative'}}>
+        <button onClick={onDelete} title="Hapus"
+          style={{position:'absolute',left:16,top:22,width:38,height:38,borderRadius:'50%',background:'#FFF0F0',border:`1.5px solid ${RD}`,cursor:'pointer',fontSize:15,color:RD}}>🗑️</button>
+        <button onClick={onEdit} title="Edit"
+          style={{position:'absolute',right:16,top:22,width:38,height:38,borderRadius:'50%',background:GL,border:`1.5px solid ${G}`,cursor:'pointer',fontSize:15,color:GD}}>✏️</button>
+        <div style={{width:76,height:76,borderRadius:'50%',background:`linear-gradient(135deg,${G},#1B7A43)`,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,fontWeight:800,margin:'0 auto 10px'}}>
+          {inisialNama(customer.name)}
+        </div>
+        <div style={{fontWeight:800,fontSize:18}}>{customer.name}</div>
+        {customer.notes&&<div style={{fontSize:12,color:MT,marginTop:4}}>📝 {customer.notes}</div>}
+      </div>
+
+      {/* Kontak + aksi */}
+      <div style={{background:'#fff',borderRadius:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14,overflow:'hidden'}}>
+        {customer.phone ? (
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px'}}>
+            <div style={{fontWeight:600,fontSize:14}}>{customer.phone}</div>
+            <div style={{display:'flex',gap:10}}>
+              <a href={`tel:${customer.phone}`} style={{width:40,height:40,borderRadius:'50%',background:'#E3F2FD',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,textDecoration:'none'}}>📞</a>
+              <a href={`sms:${customer.phone}`} style={{width:40,height:40,borderRadius:'50%',background:'#FFF3D6',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,textDecoration:'none'}}>💬</a>
+              <a href={waLink(customer.phone)} target="_blank" rel="noopener" style={{width:40,height:40,borderRadius:'50%',background:'#E0F7E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,textDecoration:'none'}}>🟢</a>
+            </div>
+          </div>
+        ) : (
+          <div style={{padding:'14px 16px',fontSize:13,color:MT}}>📱 Belum ada nomor HP — tap ✏️ untuk menambahkan</div>
+        )}
+        {customer.address&&(
+          <div style={{padding:'12px 16px',borderTop:'1px solid #f0f0f0',fontSize:13,color:MT}}>📍 {customer.address}</div>
+        )}
+      </div>
+
+      {/* Statistik drillable */}
+      {loading ? <Loading/> : (
+        <div style={{background:'#fff',borderRadius:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+          <div onClick={()=>setSubview('piutang')}
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',borderBottom:'1px solid #f0f0f0',cursor:'pointer'}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600}}>Tot. piutang: <b>{piutangs.length} kali</b></div>
+              <div style={{fontSize:13,marginTop:3}}>Tot. sisa piutang: <b style={{color:sisaPiutang>0?RD:GD}}>{fmt(sisaPiutang)}</b></div>
+            </div>
+            <div style={{fontSize:18,color:MT}}>›</div>
+          </div>
+          <div onClick={()=>setSubview('transaksi')}
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',cursor:'pointer'}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600}}>Tot. semua transaksi: <b>{txs.length} kali</b></div>
+              <div style={{fontSize:13,marginTop:3}}>Tot. semua pendapatan: <b style={{color:GD}}>{fmt(totPendapatan)}</b></div>
+            </div>
+            <div style={{fontSize:18,color:MT}}>›</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ManajemenPelanggan() {
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState('');
@@ -5330,6 +5452,7 @@ function ManajemenPelanggan() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selected, setSelected] = useState(null); // pelanggan yang dibuka detailnya
 
   const load = useCallback(async()=>{
     setLoading(true); setError(null);
@@ -5348,6 +5471,8 @@ function ManajemenPelanggan() {
     try {
       editId ? await sbUpdate('customers', editId, form) : await sbInsert('customers', [form]);
       setShowForm(false); setEditId(null); setForm({name:'',phone:'',address:'',notes:''});
+      // Kalau lagi buka detail, refresh data pelanggan yang dipilih
+      if(selected && editId===selected.id) setSelected(s=>({...s, ...form}));
       load();
     } catch(e){ alert('Gagal: '+e.message); }
     setSaving(false);
@@ -5355,16 +5480,27 @@ function ManajemenPelanggan() {
 
   const del = async(id)=>{
     if(!confirm('Hapus pelanggan ini?')) return;
-    try { await sbDelete('customers', id); load(); }
+    try { await sbDelete('customers', id); setSelected(null); load(); }
     catch(e){ alert('Gagal: '+e.message); }
   };
 
   if(error) return <ErrBox msg={error} onRetry={load}/>;
 
+  // ── VIEW: DETAIL ──
+  if(selected && !showForm) return (
+    <PelangganDetailView
+      customer={selected}
+      onBack={()=>setSelected(null)}
+      onEdit={()=>{setEditId(selected.id);setForm({name:selected.name,phone:selected.phone||'',address:selected.address||'',notes:selected.notes||''});setShowForm(true);}}
+      onDelete={()=>del(selected.id)}
+    />
+  );
+
+  // ── VIEW: LIST (+ form) ──
   return (
     <div style={{padding:16, maxWidth:900, margin:'0 auto'}}>
       <div style={{display:'flex', gap:10, marginBottom:16}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari nama / no. HP..."
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Nama atau no. telp..."
           style={{flex:1, padding:'10px 14px', border:'1.5px solid #eee', borderRadius:8, fontSize:14, outline:'none'}}/>
         <button onClick={()=>{setEditId(null);setForm({name:'',phone:'',address:'',notes:''});setShowForm(v=>!v);}}
           style={{padding:'10px 16px', background:G, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer'}}>
@@ -5390,22 +5526,18 @@ function ManajemenPelanggan() {
         <div style={{background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
           {filtered.length===0 && <div style={{textAlign:'center', padding:'32px 0', color:MT}}>Belum ada pelanggan</div>}
           {filtered.map((c,i)=>(
-            <div key={c.id} style={{display:'flex', alignItems:'center', padding:'12px 16px', borderBottom:i<filtered.length-1?'1px solid #f0f0f0':'none', gap:12}}>
-              <div style={{width:42, height:42, borderRadius:'50%', background:GL, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, flexShrink:0}}>👤</div>
+            <div key={c.id} onClick={()=>setSelected(c)}
+              style={{display:'flex', alignItems:'center', padding:'12px 16px', borderBottom:i<filtered.length-1?'1px solid #f0f0f0':'none', gap:12, cursor:'pointer'}}>
+              <div style={{width:44, height:44, borderRadius:'50%', background:'#F0F1F5', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#8A8F98', flexShrink:0}}>
+                {inisialNama(c.name)}
+              </div>
               <div style={{flex:1, minWidth:0}}>
                 <div style={{fontWeight:700, fontSize:14}}>{c.name}</div>
-                <div style={{fontSize:12, color:MT, marginTop:2}}>
-                  {c.phone&&<span>📱 {c.phone}</span>}
-                  {c.address&&<span style={{marginLeft:8}}>📍 {c.address}</span>}
+                <div style={{fontSize:12, color:MT, marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                  {c.phone||c.address||c.notes||'—'}
                 </div>
-                {c.notes&&<div style={{fontSize:11, color:MT, marginTop:2}}>📝 {c.notes}</div>}
               </div>
-              <div style={{display:'flex', gap:6}}>
-                <button onClick={()=>{setEditId(c.id);setForm({name:c.name,phone:c.phone||'',address:c.address||'',notes:c.notes||''});setShowForm(true);}}
-                  style={{padding:'6px 10px', background:GL, border:`1px solid ${G}`, borderRadius:6, cursor:'pointer', fontSize:13, color:GD}}>✏️</button>
-                <button onClick={()=>del(c.id)}
-                  style={{padding:'6px 10px', background:'#FFF0F0', border:`1px solid ${RD}`, borderRadius:6, cursor:'pointer', fontSize:13, color:RD}}>🗑️</button>
-              </div>
+              <div style={{fontSize:18, color:'#ccc'}}>›</div>
             </div>
           ))}
         </div>
@@ -5424,6 +5556,7 @@ function ManajemenSupplier() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selected, setSelected] = useState(null); // supplier yang dibuka detailnya
 
   const load = useCallback(async()=>{
     setLoading(true); setError(null);
@@ -5442,6 +5575,7 @@ function ManajemenSupplier() {
     try {
       editId ? await sbUpdate('suppliers', editId, form) : await sbInsert('suppliers', [form]);
       setShowForm(false); setEditId(null); setForm({name:'',phone:'',address:'',notes:''});
+      if(selected && editId===selected.id) setSelected(s=>({...s, ...form}));
       load();
     } catch(e){ alert('Gagal: '+e.message); }
     setSaving(false);
@@ -5449,16 +5583,27 @@ function ManajemenSupplier() {
 
   const del = async(id)=>{
     if(!confirm('Hapus supplier ini?')) return;
-    try { await sbDelete('suppliers', id); load(); }
+    try { await sbDelete('suppliers', id); setSelected(null); load(); }
     catch(e){ alert('Gagal: '+e.message); }
   };
 
   if(error) return <ErrBox msg={error} onRetry={load}/>;
 
+  // ── VIEW: DETAIL ──
+  if(selected && !showForm) return (
+    <SupplierDetailView
+      supplier={selected}
+      onBack={()=>setSelected(null)}
+      onEdit={()=>{setEditId(selected.id);setForm({name:selected.name,phone:selected.phone||'',address:selected.address||'',notes:selected.notes||''});setShowForm(true);}}
+      onDelete={()=>del(selected.id)}
+    />
+  );
+
+  // ── VIEW: LIST (+ form) ──
   return (
     <div style={{padding:16, maxWidth:900, margin:'0 auto'}}>
       <div style={{display:'flex', gap:10, marginBottom:16}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari nama supplier..."
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Nama atau no. telp..."
           style={{flex:1, padding:'10px 14px', border:'1.5px solid #eee', borderRadius:8, fontSize:14, outline:'none'}}/>
         <button onClick={()=>{setEditId(null);setForm({name:'',phone:'',address:'',notes:''});setShowForm(v=>!v);}}
           style={{padding:'10px 16px', background:G, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer'}}>
@@ -5484,24 +5629,138 @@ function ManajemenSupplier() {
         <div style={{background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
           {filtered.length===0 && <div style={{textAlign:'center', padding:'32px 0', color:MT}}>Belum ada supplier</div>}
           {filtered.map((s,i)=>(
-            <div key={s.id} style={{display:'flex', alignItems:'center', padding:'12px 16px', borderBottom:i<filtered.length-1?'1px solid #f0f0f0':'none', gap:12}}>
-              <div style={{width:42, height:42, borderRadius:'50%', background:'#EDE7F6', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, flexShrink:0}}>🏭</div>
+            <div key={s.id} onClick={()=>setSelected(s)}
+              style={{display:'flex', alignItems:'center', padding:'12px 16px', borderBottom:i<filtered.length-1?'1px solid #f0f0f0':'none', gap:12, cursor:'pointer'}}>
+              <div style={{width:44, height:44, borderRadius:'50%', background:'#EDE7F6', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#8E44AD', flexShrink:0}}>
+                {inisialNama(s.name)}
+              </div>
               <div style={{flex:1, minWidth:0}}>
                 <div style={{fontWeight:700, fontSize:14}}>{s.name}</div>
-                <div style={{fontSize:12, color:MT, marginTop:2}}>
-                  {s.phone&&<span>📱 {s.phone}</span>}
-                  {s.address&&<span style={{marginLeft:8}}>📍 {s.address}</span>}
+                <div style={{fontSize:12, color:MT, marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                  {s.phone||s.address||s.notes||'—'}
                 </div>
-                {s.notes&&<div style={{fontSize:11, color:MT, marginTop:2}}>📝 {s.notes}</div>}
               </div>
-              <div style={{display:'flex', gap:6}}>
-                <button onClick={()=>{setEditId(s.id);setForm({name:s.name,phone:s.phone||'',address:s.address||'',notes:s.notes||''});setShowForm(true);}}
-                  style={{padding:'6px 10px', background:'#EDE7F6', border:'1px solid #8E44AD', borderRadius:6, cursor:'pointer', fontSize:13, color:'#7B1FA2'}}>✏️</button>
-                <button onClick={()=>del(s.id)}
-                  style={{padding:'6px 10px', background:'#FFF0F0', border:`1px solid ${RD}`, borderRadius:6, cursor:'pointer', fontSize:13, color:RD}}>🗑️</button>
+              <div style={{fontSize:18, color:'#ccc'}}>›</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Detail Supplier ala Kasir Pintar: profil + aksi kontak + statistik hutang ─
+function SupplierDetailView({supplier, onBack, onEdit, onDelete}) {
+  const [pos, setPos] = useState([]);
+  const [hutangs, setHutangs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [subview, setSubview] = useState(null); // null | 'hutang' | 'po'
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try {
+        const [p, d] = await Promise.all([
+          sbGet('purchase_orders',{eq:{supplier:supplier.name},order:'created_at',asc:false}).catch(()=>[]),
+          sbGet('debts',{eq:{party_name:supplier.name},order:'created_at',asc:false}).catch(()=>[]),
+        ]);
+        setPos((p||[]).filter(x=>x.status!=='Dibatalkan'));
+        setHutangs((d||[]).filter(x=>x.type==='hutang'));
+      } catch(e){}
+      setLoading(false);
+    })();
+  },[supplier.id]);
+
+  const sisaHutangPO     = pos.filter(p=>p.bayar==='Hutang').reduce((s,p)=>s+Math.max(0,(p.total||0)-(p.paid||0)),0);
+  const sisaHutangManual = hutangs.filter(h=>h.status!=='Lunas').reduce((s,h)=>s+Math.max(0,(h.amount||0)-(h.paid||0)),0);
+  const totalSisaHutang  = sisaHutangPO + sisaHutangManual;
+  const totalPembelian   = pos.reduce((s,p)=>s+(p.total||0),0);
+  const jumlahHutangAktif = pos.filter(p=>p.bayar==='Hutang'&&((p.total||0)-(p.paid||0))>0).length + hutangs.filter(h=>h.status!=='Lunas').length;
+
+  if(subview){
+    const isHutang = subview==='hutang';
+    const list = isHutang
+      ? [...pos.filter(p=>p.bayar==='Hutang').map(p=>({id:'po-'+p.id, label:'PO-'+p.id, tgl:p.created_at?.slice(0,10), nilai:Math.max(0,(p.total||0)-(p.paid||0)), status:'Belum Lunas'})),
+         ...hutangs.filter(h=>h.status!=='Lunas').map(h=>({id:'d-'+h.id, label:h.description||'Hutang manual', tgl:h.created_at?.slice(0,10), nilai:Math.max(0,(h.amount||0)-(h.paid||0)), status:'Belum Lunas'}))]
+      : pos.map(p=>({id:'po-'+p.id, label:'PO-'+p.id, tgl:p.created_at?.slice(0,10), nilai:p.total||0, status:p.bayar==='Lunas'?'Lunas':'Hutang'}));
+    return (
+      <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+        <button onClick={()=>setSubview(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali ke {supplier.name}</button>
+        <h3 style={{margin:'0 0 12px',fontSize:16,fontWeight:800}}>{isHutang?'💸 Hutang Berjalan':'📦 Riwayat Pembelian (PO)'}</h3>
+        <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+          {list.length===0 && <div style={{textAlign:'center',padding:24,color:MT,fontSize:13}}>Belum ada data.</div>}
+          {list.map((it,i)=>(
+            <div key={it.id} style={{padding:'12px 16px',borderBottom:i<list.length-1?'1px solid #f0f0f0':'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:13}}>{it.label}</div>
+                <div style={{fontSize:11,color:MT,marginTop:2}}>{it.tgl}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontWeight:800,fontSize:14,color:it.status==='Lunas'?GD:RD}}>{fmt(it.nilai)}</div>
+                <div style={{fontSize:10,fontWeight:700,color:it.status==='Lunas'?GD:OR}}>{it.status}</div>
               </div>
             </div>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto'}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+
+      {/* Profil */}
+      <div style={{background:'#fff',borderRadius:14,padding:'22px 16px',textAlign:'center',boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14,position:'relative'}}>
+        <button onClick={onDelete} title="Hapus"
+          style={{position:'absolute',left:16,top:22,width:38,height:38,borderRadius:'50%',background:'#FFF0F0',border:`1.5px solid ${RD}`,cursor:'pointer',fontSize:15,color:RD}}>🗑️</button>
+        <button onClick={onEdit} title="Edit"
+          style={{position:'absolute',right:16,top:22,width:38,height:38,borderRadius:'50%',background:'#EDE7F6',border:'1.5px solid #8E44AD',cursor:'pointer',fontSize:15,color:'#7B1FA2'}}>✏️</button>
+        <div style={{width:76,height:76,borderRadius:'50%',background:'linear-gradient(135deg,#8E44AD,#5E35B1)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,fontWeight:800,margin:'0 auto 10px'}}>
+          {inisialNama(supplier.name)}
+        </div>
+        <div style={{fontWeight:800,fontSize:18}}>{supplier.name}</div>
+        {supplier.notes&&<div style={{fontSize:12,color:MT,marginTop:4}}>📝 {supplier.notes}</div>}
+      </div>
+
+      {/* Kontak + aksi */}
+      <div style={{background:'#fff',borderRadius:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:14,overflow:'hidden'}}>
+        {supplier.phone ? (
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px'}}>
+            <div style={{fontWeight:600,fontSize:14}}>{supplier.phone}</div>
+            <div style={{display:'flex',gap:10}}>
+              <a href={`tel:${supplier.phone}`} style={{width:40,height:40,borderRadius:'50%',background:'#E3F2FD',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,textDecoration:'none'}}>📞</a>
+              <a href={`sms:${supplier.phone}`} style={{width:40,height:40,borderRadius:'50%',background:'#FFF3D6',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,textDecoration:'none'}}>💬</a>
+              <a href={waLink(supplier.phone)} target="_blank" rel="noopener" style={{width:40,height:40,borderRadius:'50%',background:'#E0F7E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,textDecoration:'none'}}>🟢</a>
+            </div>
+          </div>
+        ) : (
+          <div style={{padding:'14px 16px',fontSize:13,color:MT}}>📱 Belum ada nomor HP — tap ✏️ untuk menambahkan</div>
+        )}
+        {supplier.address&&(
+          <div style={{padding:'12px 16px',borderTop:'1px solid #f0f0f0',fontSize:13,color:MT}}>📍 {supplier.address}</div>
+        )}
+      </div>
+
+      {/* Statistik drillable */}
+      {loading ? <Loading/> : (
+        <div style={{background:'#fff',borderRadius:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+          <div onClick={()=>setSubview('hutang')}
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',borderBottom:'1px solid #f0f0f0',cursor:'pointer'}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600}}>Hutang berjalan: <b>{jumlahHutangAktif} transaksi</b></div>
+              <div style={{fontSize:13,marginTop:3}}>Tot. sisa hutang: <b style={{color:totalSisaHutang>0?RD:GD}}>{fmt(totalSisaHutang)}</b></div>
+            </div>
+            <div style={{fontSize:18,color:MT}}>›</div>
+          </div>
+          <div onClick={()=>setSubview('po')}
+            style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',cursor:'pointer'}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600}}>Tot. pembelian: <b>{pos.length} PO</b></div>
+              <div style={{fontSize:13,marginTop:3}}>Tot. nilai pembelian: <b style={{color:'#7B1FA2'}}>{fmt(totalPembelian)}</b></div>
+            </div>
+            <div style={{fontSize:18,color:MT}}>›</div>
+          </div>
         </div>
       )}
     </div>
@@ -6442,11 +6701,12 @@ function HutangPiutang() {
   const hutangSupplierList = Object.values(hutangSupplierMap)
     .filter(s=>{
       if(hutangSearch && !s.name.toLowerCase().includes(hutangSearch.toLowerCase())) return false;
-      const hasBelum = s.items.some(i=>i.status==='Belum Lunas');
-      const hasLunas = s.items.some(i=>i.status==='Lunas');
-      if(hutangFilterBelum&&hutangFilterLunas) return hasBelum||hasLunas;
-      if(hutangFilterBelum) return hasBelum;
-      if(hutangFilterLunas) return hasLunas;
+      // Status supplier ditentukan tunggakannya: masih ada yang Belum Lunas = supplier "Belum Lunas";
+      // semua transaksinya beres = supplier "Lunas". Bukan sekadar "pernah punya transaksi lunas".
+      const masihNunggak = s.items.some(i=>i.status==='Belum Lunas');
+      if(hutangFilterBelum&&hutangFilterLunas) return true;
+      if(hutangFilterBelum) return masihNunggak;
+      if(hutangFilterLunas) return !masihNunggak;
       return true;
     })
     .sort((a,b)=>b.totalSisa-a.totalSisa);
