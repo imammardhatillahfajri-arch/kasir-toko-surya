@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-KEMBALIBLUETOOTH";
+const APP_VERSION = "v14.07.2026-HUTANGLUNASFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -6361,8 +6361,8 @@ function HutangPiutang() {
       setTrans(txs||[]);
       setDebts(dbs||[]);
       setCustomers(custs||[]);
-      // Load items untuk setiap PO hutang
-      const hutangPOs = (pos||[]).filter(p=>p.bayar==='Hutang'&&p.status!=='Dibatalkan');
+      // Load items untuk setiap PO (Hutang & Lunas — biar filter "Lunas" di UI beneran kepakai)
+      const hutangPOs = (pos||[]).filter(p=>p.status!=='Dibatalkan');
       const withItems = await Promise.all(hutangPOs.map(async po=>({
         ...po,
         items: await sbGet('po_items',{eq:{po_id:po.id},order:'id'})
