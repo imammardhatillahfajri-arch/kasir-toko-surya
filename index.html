@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-KONTAKDETAIL";
+const APP_VERSION = "v14.07.2026-LINKPIUTANG";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -5332,7 +5332,7 @@ function waLink(phone) {
 }
 
 // ── Detail Pelanggan ala Kasir Pintar: profil + aksi kontak + statistik ─────
-function PelangganDetailView({customer, onBack, onEdit, onDelete}) {
+function PelangganDetailView({customer, onBack, onEdit, onDelete, onOpenPiutang}) {
   const [txs, setTxs] = useState([]);
   const [piutangs, setPiutangs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -5365,18 +5365,27 @@ function PelangganDetailView({customer, onBack, onEdit, onDelete}) {
         <h3 style={{margin:'0 0 12px',fontSize:16,fontWeight:800}}>{isPiutang?'💰 Riwayat Piutang':'🧾 Riwayat Transaksi'}</h3>
         <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
           {list.length===0 && <div style={{textAlign:'center',padding:24,color:MT,fontSize:13}}>Belum ada data.</div>}
-          {list.map((it,i)=>(
-            <div key={it.id} style={{padding:'12px 16px',borderBottom:i<list.length-1?'1px solid #f0f0f0':'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div>
-                <div style={{fontWeight:700,fontSize:13}}>{isPiutang?(it.description||'Piutang'):(it.invoice_no||'-')}</div>
-                <div style={{fontSize:11,color:MT,marginTop:2}}>{it.created_at?.slice(0,10)}</div>
+          {list.map((it,i)=>{
+            const invMatch = isPiutang ? String(it.description||'').match(/INV-\d+/) : null;
+            const bisaLink = isPiutang && onOpenPiutang;
+            return (
+              <div key={it.id}
+                onClick={bisaLink?()=>onOpenPiutang({party:customer.name, invoice:invMatch?invMatch[0]:undefined}):undefined}
+                style={{padding:'12px 16px',borderBottom:i<list.length-1?'1px solid #f0f0f0':'none',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:bisaLink?'pointer':'default'}}>
+                <div>
+                  <div style={{fontWeight:700,fontSize:13}}>{isPiutang?(it.description||'Piutang'):(it.invoice_no||'-')}</div>
+                  <div style={{fontSize:11,color:MT,marginTop:2}}>{it.created_at?.slice(0,10)}</div>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{textAlign:'right'}}>
+                    <div style={{fontWeight:800,fontSize:14,color:isPiutang?(it.status==='Lunas'?GD:RD):GD}}>{fmt(isPiutang?(it.amount||0):(it.total||0))}</div>
+                    <div style={{fontSize:10,fontWeight:700,color:it.status==='Lunas'?GD:OR}}>{it.status}</div>
+                  </div>
+                  {bisaLink&&<div style={{fontSize:16,color:'#ccc'}}>›</div>}
+                </div>
               </div>
-              <div style={{textAlign:'right'}}>
-                <div style={{fontWeight:800,fontSize:14,color:isPiutang?(it.status==='Lunas'?GD:RD):GD}}>{fmt(isPiutang?(it.amount||0):(it.total||0))}</div>
-                <div style={{fontSize:10,fontWeight:700,color:(isPiutang?it.status==='Lunas':it.status==='Lunas')?GD:OR}}>{it.status}</div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -5443,7 +5452,7 @@ function PelangganDetailView({customer, onBack, onEdit, onDelete}) {
   );
 }
 
-function ManajemenPelanggan() {
+function ManajemenPelanggan({onOpenPiutang}={}) {
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -5491,6 +5500,7 @@ function ManajemenPelanggan() {
     <PelangganDetailView
       customer={selected}
       onBack={()=>setSelected(null)}
+      onOpenPiutang={onOpenPiutang}
       onEdit={()=>{setEditId(selected.id);setForm({name:selected.name,phone:selected.phone||'',address:selected.address||'',notes:selected.notes||''});setShowForm(true);}}
       onDelete={()=>del(selected.id)}
     />
@@ -5547,7 +5557,7 @@ function ManajemenPelanggan() {
 }
 
 // ── MANAJEMEN SUPPLIER ─────────────────────────────────────────────────────
-function ManajemenSupplier() {
+function ManajemenSupplier({onOpenHutang}={}) {
   const [suppliers, setSuppliers] = useState([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -5594,6 +5604,7 @@ function ManajemenSupplier() {
     <SupplierDetailView
       supplier={selected}
       onBack={()=>setSelected(null)}
+      onOpenHutang={onOpenHutang}
       onEdit={()=>{setEditId(selected.id);setForm({name:selected.name,phone:selected.phone||'',address:selected.address||'',notes:selected.notes||''});setShowForm(true);}}
       onDelete={()=>del(selected.id)}
     />
@@ -5650,7 +5661,7 @@ function ManajemenSupplier() {
 }
 
 // ── Detail Supplier ala Kasir Pintar: profil + aksi kontak + statistik hutang ─
-function SupplierDetailView({supplier, onBack, onEdit, onDelete}) {
+function SupplierDetailView({supplier, onBack, onEdit, onDelete, onOpenHutang}) {
   const [pos, setPos] = useState([]);
   const [hutangs, setHutangs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -5689,18 +5700,26 @@ function SupplierDetailView({supplier, onBack, onEdit, onDelete}) {
         <h3 style={{margin:'0 0 12px',fontSize:16,fontWeight:800}}>{isHutang?'💸 Hutang Berjalan':'📦 Riwayat Pembelian (PO)'}</h3>
         <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
           {list.length===0 && <div style={{textAlign:'center',padding:24,color:MT,fontSize:13}}>Belum ada data.</div>}
-          {list.map((it,i)=>(
-            <div key={it.id} style={{padding:'12px 16px',borderBottom:i<list.length-1?'1px solid #f0f0f0':'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div>
-                <div style={{fontWeight:700,fontSize:13}}>{it.label}</div>
-                <div style={{fontSize:11,color:MT,marginTop:2}}>{it.tgl}</div>
+          {list.map((it,i)=>{
+            const bisaLink = isHutang && onOpenHutang;
+            return (
+              <div key={it.id}
+                onClick={bisaLink?()=>onOpenHutang({party:supplier.name}):undefined}
+                style={{padding:'12px 16px',borderBottom:i<list.length-1?'1px solid #f0f0f0':'none',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:bisaLink?'pointer':'default'}}>
+                <div>
+                  <div style={{fontWeight:700,fontSize:13}}>{it.label}</div>
+                  <div style={{fontSize:11,color:MT,marginTop:2}}>{it.tgl}</div>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{textAlign:'right'}}>
+                    <div style={{fontWeight:800,fontSize:14,color:it.status==='Lunas'?GD:RD}}>{fmt(it.nilai)}</div>
+                    <div style={{fontSize:10,fontWeight:700,color:it.status==='Lunas'?GD:OR}}>{it.status}</div>
+                  </div>
+                  {bisaLink&&<div style={{fontSize:16,color:'#ccc'}}>›</div>}
+                </div>
               </div>
-              <div style={{textAlign:'right'}}>
-                <div style={{fontWeight:800,fontSize:14,color:it.status==='Lunas'?GD:RD}}>{fmt(it.nilai)}</div>
-                <div style={{fontSize:10,fontWeight:700,color:it.status==='Lunas'?GD:OR}}>{it.status}</div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -6577,8 +6596,8 @@ function HutangTxDetail({item, payments, payAmount, setPayAmount, paying, onBack
   );
 }
 
-function HutangPiutang() {
-  const [tab, setTab]             = useState('piutang');
+function HutangPiutang({initialTarget, onConsumeTarget}={}) {
+  const [tab, setTab]             = useState(initialTarget?.tab==='hutang'?'hutang':'piutang');
   const [transactions, setTrans]  = useState([]);
   const [debts, setDebts]         = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -6807,6 +6826,37 @@ function HutangPiutang() {
     } catch(e){}
     setSelectedInvoice(prev=>({...prev, itemsLoading:false}));
   };
+
+  // ── Deep-link dari halaman lain (mis. detail pelanggan/supplier di Manajemen):
+  // buka langsung pihak & invoice yang diminta begitu data selesai dimuat ──
+  const targetConsumed = React.useRef(false);
+  useEffect(()=>{
+    if(loading || !initialTarget || targetConsumed.current) return;
+    targetConsumed.current = true;
+    if(initialTarget.tab==='hutang'){
+      if(initialTarget.party) setSelSupplierHutang(initialTarget.party);
+    } else if(initialTarget.party){
+      // Bangun objek customer dengan bentuk yang sama seperti customerMap
+      const todayD = localDateStr();
+      const txs = transactions.filter(t=>t.status==='Piutang' && (t.customer||'Umum')===initialTarget.party);
+      const c = {name:initialTarget.party,txList:[...txs],total:0,sisa:0,overdue:0,dueToday:0,dueSoon:0,txCount:txs.length};
+      txs.forEach(t=>{
+        c.total += t.total; c.sisa += t.total-(t.paid||0);
+        if(t.due_date){
+          if(t.due_date<todayD)        c.overdue  += t.total-(t.paid||0);
+          else if(t.due_date===todayD) c.dueToday += t.total-(t.paid||0);
+          else                         c.dueSoon  += t.total-(t.paid||0);
+        }
+      });
+      transactions.filter(t=>t.status==='Lunas'&&t.customer===initialTarget.party).forEach(t=>c.txList.push(t));
+      if(c.txList.length) setSelectedCustomer(c);
+      if(initialTarget.invoice){
+        const inv = transactions.find(t=>t.invoice_no===initialTarget.invoice);
+        if(inv) openInvoice(inv);
+      }
+    }
+    if(onConsumeTarget) onConsumeTarget();
+  },[loading, initialTarget]); // eslint-disable-line
 
   // Lunasi sekaligus semua piutang pelanggan
   const lunasiSekaligus = async(customer) => {
@@ -7637,8 +7687,11 @@ function ManajemenRetur() {
 
 function ManajemenHub({targetProductId, onConsumeTarget}={}) {
   const [subPage, setSubPage] = useState('produk');
+  const [hutangTarget, setHutangTarget] = useState(null); // deep-link ke tab Hutang Piutang
 
   useEffect(()=>{ if(targetProductId) setSubPage('produk'); },[targetProductId]);
+
+  const bukaHutangPiutang = (target) => { setHutangTarget(target); setSubPage('hutang'); };
 
   const subMenus = [
     {id:'produk',    icon:'🗄️', label:'Produk'},
@@ -7663,9 +7716,9 @@ function ManajemenHub({targetProductId, onConsumeTarget}={}) {
       {/* Sub Page Content */}
       {subPage==='produk'    && <Manajemen initialProductId={targetProductId} onConsumeTarget={onConsumeTarget}/>}
       {subPage==='stok'      && <ManajemenStok/>}
-      {subPage==='pelanggan' && <ManajemenPelanggan/>}
-      {subPage==='supplier'  && <ManajemenSupplier/>}
-      {subPage==='hutang'    && <HutangPiutang/>}
+      {subPage==='pelanggan' && <ManajemenPelanggan onOpenPiutang={(t)=>bukaHutangPiutang({tab:'piutang',...t})}/>}
+      {subPage==='supplier'  && <ManajemenSupplier onOpenHutang={(t)=>bukaHutangPiutang({tab:'hutang',...t})}/>}
+      {subPage==='hutang'    && <HutangPiutang initialTarget={hutangTarget} onConsumeTarget={()=>setHutangTarget(null)}/>}
       {subPage==='retur'     && <ManajemenRetur/>}
     </div>
   );
