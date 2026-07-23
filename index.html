@@ -58,7 +58,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-LINKHUTANGSUP";
+const APP_VERSION = "v14.07.2026-KERANJANGBELIFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -13996,7 +13996,7 @@ function Pembelian() {
         </div>
 
         {/* Cart items */}
-        <div style={{flex:1,overflowY:'auto',padding:'8px 0'}}>
+        <div style={{flex:1,overflowY:'auto',padding:'8px 0',minHeight:130}}>
           {cart.length===0 ? (
             <div style={{textAlign:'center',padding:'40px 16px',color:MT}}>
               <div style={{fontSize:36,marginBottom:8}}>🛒</div>
@@ -14037,7 +14037,7 @@ function Pembelian() {
 
         {/* Checkout form */}
         {cart.length>0&&(
-          <div style={{padding:'12px 14px',borderTop:'2px solid #eee',flexShrink:0,background:'#F5F6FA'}}>
+          <div style={{padding:'12px 14px',borderTop:'2px solid #eee',flexShrink:0,background:'#F5F6FA',maxHeight:'52vh',overflowY:'auto'}}>
             {/* Supplier */}
             <div style={{marginBottom:8}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:3}}>
