@@ -197,11 +197,18 @@ Kembalikan HANYA JSON tanpa markdown:
     {"nama": "nama produk lengkap (TANPA embel-embel @NNN)", "qty": angka, "harga": angka satuan (SEBELUM diskon), "satuan": "pcs/roll/meter/dus/dll", "isi_per_satuan": angka atau null, "diskon_persen": "string atau null"}
   ],
   "total": angka total keseluruhan,
+  "ppn_persen": angka persen PPN atau 0,
   "catatan": "catatan tambahan dari nota jika ada",
   "no_nota": "nomor nota/faktur jika ada"
 }
 
 Aturan: Angka tanpa titik/koma (Rp 1.500 = 1500). Kredit/tempo = Hutang. Tunai/cash = Lunas. "harga" SELALU harga satuan SEBELUM diskon dipotong (harga kotor/asli), JANGAN dihitung setelah diskon — pemotongan diskon dilakukan sistem, bukan kamu.
+
+PENTING soal ppn_persen: banyak faktur mencantumkan PPN di bagian bawah (baris "PPN", "PPN 11%", "PPN 12%", atau nominal PPN dengan DPP). Aturannya:
+- Kalau tarif persennya tertulis langsung (mis. "PPN 11%") → ppn_persen = 11
+- Kalau cuma nominal PPN + DPP yang tertulis → hitung tarifnya: bulatkan (nominal PPN ÷ DPP × 100) ke bilangan bulat terdekat (contoh: PPN 418239, DPP 3485326 → 418239/3485326×100 = 12 → ppn_persen = 12)
+- Kalau nota tidak mencantumkan PPN sama sekali → ppn_persen = 0
+- JANGAN tambahkan PPN ke "harga" item — harga item tetap harga sebelum PPN, sistem yang menghitung PPN dari ppn_persen.
 
 PENTING soal isi_per_satuan: supplier sering nulis nama barang dengan embel-embel "@NNN" (contoh: "ELBOW 1/2\\" AW PRALON @225"), artinya 1 satuan yang dibeli (misal 1 DUS) isinya NNN pcs (di contoh ini 225 pcs per dus). Kalau kamu temukan pola "@angka" ini:
 - Set isi_per_satuan = angka tersebut (contoh: 225)
