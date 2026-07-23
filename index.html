@@ -50,6 +50,20 @@ input,select{font-family:inherit}
 
 /* Smooth transitions */
 .cart-sheet { transition: transform 0.3s ease; }
+
+/* Pembelian: panel keranjang jadi bottom-sheet di HP, sidebar tetap di layar lebar */
+.pem-cart-fab { display: none; }
+@media (max-width: 768px) {
+  .pem-panel {
+    position: fixed !important; left: 0; right: 0; bottom: 0; top: auto !important;
+    width: 100% !important; height: 86vh; max-height: 86vh; z-index: 80;
+    border-radius: 18px 18px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,0.25);
+    transform: translateY(110%); transition: transform 0.3s ease;
+  }
+  .pem-panel.open { transform: translateY(0); }
+  .pem-cart-fab { display: flex !important; }
+  .pem-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 79; }
+}
 </style>
 </head>
 <body>
@@ -58,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-KERANJANGBELIFIX";
+const APP_VERSION = "v14.07.2026-PEMBELIANMOBILE";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -13083,6 +13097,7 @@ function Pembelian() {
   const [view,       setView]       = useState('list');
   const [products,   setProducts]   = useState([]);
   const [cart,       setCart]       = useState([]); // {product, qty, price, buy_price}
+  const [showCartMobile, setShowCartMobile] = useState(false); // bottom-sheet keranjang di HP
   const [poUnitSel,  setPoUnitSel]  = useState(null); // modal multisatuan pembelian
   const [showTambahProdukPembelian, setShowTambahProdukPembelian] = useState(false);
   const [poUnits,    setPoUnits]    = useState({});   // product_id -> satuan tambahan
@@ -13272,6 +13287,7 @@ function Pembelian() {
       })));
       notifyDataChanged('pembelian');
       setCart([]);
+      setShowCartMobile(false);
       setForm({supplier_id:'', bayar:'Lunas', due:'', notes:'', tanggal:new Date().toISOString().slice(0,10), diskon_persen_nota:'0', ppn_persen:0, potongan_nominal:0});
       setView('list');
       loadOrders();
@@ -13346,7 +13362,11 @@ function Pembelian() {
           const isUnitBesar = prodUnitBesar && prodUnitBesar!=='pcs' && itemUnit &&
                               (itemUnit===prodUnitBesar || itemUnit.includes(prodUnitBesar) || prodUnitBesar.includes(itemUnit));
           // Prioritas 1: konversi yang sudah dikonfirmasi kasir/admin langsung dari nota (paling akurat, spesifik ke transaksi ini)
+          // Prioritas 2: pola "@NNN" di nama item (nota lama sebelum fitur konfirmasi konversi) — mis. "ELBOW @ 225" artinya 1 dus isi 225
+          const namaKonvMatch = String(item.name||'').match(/@\s*(\d+)/);
+          const konvDariNama = namaKonvMatch ? parseFloat(namaKonvMatch[1]) : 0;
           let konversi = (parseFloat(item.konversi_terkonfirmasi)>1) ? parseFloat(item.konversi_terkonfirmasi)
+                       : (konvDariNama>1) ? konvDariNama
                        : isUnitBesar ? (prod.konversi||1) : 1;
           // Cek juga satuan tambahan di tabel product_units (mis. ROLL ratio 10)
           if(konversi===1 && itemUnit && itemUnit!==(prod.unit_kecil||'pcs').toLowerCase() && itemUnit!=='pcs'){
@@ -13405,10 +13425,15 @@ function Pembelian() {
           }
         } else if(!prod) {
           // Produk belum ada di database
-          if(newBuyPrice>0) {
-            const saran20 = Math.ceil(newBuyPrice * 1.20 / 100) * 100;
-            const saran30 = Math.ceil(newBuyPrice * 1.30 / 100) * 100;
-            const saran40 = Math.ceil(newBuyPrice * 1.40 / 100) * 100;
+          // Harga dibagi konversi juga di sini (konfirmasi kasir, atau pola "@NNN" di nama untuk nota lama)
+          const namaKonvMatch2 = String(item.name||'').match(/@\s*(\d+)/);
+          const konvBaru = (parseFloat(item.konversi_terkonfirmasi)>1) ? parseFloat(item.konversi_terkonfirmasi)
+                         : (namaKonvMatch2 ? parseFloat(namaKonvMatch2[1]) : 0)>1 ? parseFloat(namaKonvMatch2[1]) : 1;
+          const newBuyPriceEfektif = konvBaru>1 ? Math.round(newBuyPrice/konvBaru) : newBuyPrice;
+          if(newBuyPriceEfektif>0) {
+            const saran20 = Math.ceil(newBuyPriceEfektif * 1.20 / 100) * 100;
+            const saran30 = Math.ceil(newBuyPriceEfektif * 1.30 / 100) * 100;
+            const saran40 = Math.ceil(newBuyPriceEfektif * 1.40 / 100) * 100;
             // Cari kandidat produk yang mungkin cocok
             const allProds = await sbGet('products',{order:'name'});
             const candidates = allProds
@@ -13418,7 +13443,7 @@ function Pembelian() {
             updates.push({
               productId: null, name: item.name,
               matchedName: null,
-              oldBuyPrice: 0, newBuyPrice,
+              oldBuyPrice: 0, newBuyPrice: newBuyPriceEfektif,
               currentSellPrice: 0,
               saran20, saran30, saran40,
               newSellPrice: saran20,
@@ -13987,12 +14012,25 @@ function Pembelian() {
         </div>
       </div>
 
+      {/* Tombol keranjang mengambang (khusus HP) */}
+      <button className='pem-cart-fab' onClick={()=>setShowCartMobile(true)}
+        style={{position:'fixed',right:16,bottom:80,zIndex:70,alignItems:'center',gap:8,padding:'12px 18px',background:G,color:'#fff',border:'none',borderRadius:30,fontWeight:800,fontSize:14,cursor:'pointer',boxShadow:'0 6px 18px rgba(46,204,113,0.45)'}}>
+        🛒 {totalQty>0?`${totalQty} · ${fmt(totalCart)}`:'Keranjang'}
+      </button>
+
+      {/* Backdrop mobile saat sheet keranjang terbuka */}
+      {showCartMobile && <div className='pem-backdrop mobile-only' onClick={()=>setShowCartMobile(false)}/>}
+
       {/* ── KANAN: Keranjang + Checkout ── */}
-      <div className='panel-kanan' style={{width:320,display:'flex',flexDirection:'column',background:'#fff',flexShrink:0}}>
+      <div className={'pem-panel'+(showCartMobile?' open':'')} style={{width:320,display:'flex',flexDirection:'column',background:'#fff',flexShrink:0}}>
         {/* Header keranjang */}
-        <div style={{padding:'12px 16px',borderBottom:'1px solid #eee',background:'#F5F6FA',flexShrink:0}}>
-          <div style={{fontWeight:700,fontSize:15,color:TX}}>🛒 Keranjang Beli</div>
-          <div style={{fontSize:12,color:MT,marginTop:2}}>{totalQty} item · {fmt(totalCart)}</div>
+        <div style={{padding:'12px 16px',borderBottom:'1px solid #eee',background:'#F5F6FA',flexShrink:0,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,color:TX}}>🛒 Keranjang Beli</div>
+            <div style={{fontSize:12,color:MT,marginTop:2}}>{totalQty} item · {fmt(totalCart)}</div>
+          </div>
+          <button className='mobile-only' onClick={()=>setShowCartMobile(false)}
+            style={{width:34,height:34,borderRadius:'50%',background:'#eee',border:'none',cursor:'pointer',fontSize:15,fontWeight:700}}>✕</button>
         </div>
 
         {/* Cart items */}
