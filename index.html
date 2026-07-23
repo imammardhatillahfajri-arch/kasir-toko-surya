@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PEMBELIANMOBILE";
+const APP_VERSION = "v14.07.2026-KIRIMTAGIHAN";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -6841,6 +6841,84 @@ function HutangPiutang({initialTarget, onConsumeTarget}={}) {
     setSelectedInvoice(prev=>({...prev, itemsLoading:false}));
   };
 
+  // ── Kirim rangkuman tagihan pelanggan sebagai GAMBAR (via share sheet/WA) ──
+  const [sharingTagihan, setSharingTagihan] = useState(false);
+  const bagikanTagihan = async(cust) => {
+    setSharingTagihan(true);
+    const tokoNama   = window.TOKO_NAMA||'SURYA LISTRIK';
+    const tokoTelp   = window.TOKO_TELP||'';
+    const tokoAlamat = window.TOKO_ALAMAT||'';
+    const tglCetak   = new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+    const unpaid = (cust.txList||[]).filter(t=>t.status==='Piutang')
+      .map(t=>({inv:t.invoice_no, tempo:t.due_date||'-', sisa:Math.max(0,(t.total||0)-(t.paid||0))}))
+      .sort((a,b)=>String(a.tempo).localeCompare(String(b.tempo)));
+    const tampil = unpaid.slice(0,10);
+    const sisaBaris = unpaid.length-tampil.length;
+
+    let el = null;
+    try {
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+      el = document.createElement('div');
+      el.style.cssText = 'position:fixed;left:-9999px;top:0;width:480px;background:#fff;font-family:Segoe UI,Arial,sans-serif;color:#222;';
+      el.innerHTML = `
+        <div style="padding:22px 24px;border:3px solid #1a472a;border-radius:0">
+          <div style="text-align:center;border-bottom:2px solid #1a472a;padding-bottom:12px;margin-bottom:14px">
+            <div style="font-size:20px;font-weight:800;color:#1a472a;letter-spacing:0.5px">${tokoNama}</div>
+            ${tokoAlamat?`<div style="font-size:11px;color:#666;margin-top:2px">${tokoAlamat}</div>`:''}
+            ${tokoTelp?`<div style="font-size:11px;color:#666">Telp: ${tokoTelp}</div>`:''}
+          </div>
+          <div style="text-align:center;margin-bottom:14px">
+            <div style="display:inline-block;background:#FFF3E0;border:1.5px solid #E67E22;color:#B9770E;font-weight:800;font-size:13px;padding:5px 16px;border-radius:20px">📋 PENGINGAT TAGIHAN</div>
+          </div>
+          <div style="font-size:12px;color:#888;margin-bottom:2px">Kepada Yth,</div>
+          <div style="font-size:17px;font-weight:800;margin-bottom:12px">${cust.name}</div>
+          <div style="background:#FDF2F2;border:1.5px solid #E74C3C;border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:11px;color:#888">Total Tagihan Berjalan</div>
+              <div style="font-size:24px;font-weight:800;color:#C0392B">Rp ${(cust.sisa||0).toLocaleString('id-ID')}</div>
+            </div>
+            <div style="text-align:right;font-size:11px;color:#888">${unpaid.length} nota<br>per ${tglCetak}</div>
+          </div>
+          ${tampil.length?`
+          <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px">
+            <tr style="background:#1a472a;color:#fff"><th style="padding:6px 8px;text-align:left">No. Nota</th><th style="padding:6px 8px;text-align:center">Jatuh Tempo</th><th style="padding:6px 8px;text-align:right">Sisa</th></tr>
+            ${tampil.map((u,i)=>`<tr style="background:${i%2?'#f7f7f7':'#fff'}"><td style="padding:6px 8px;border-bottom:0.5px solid #eee;font-family:monospace">${u.inv}</td><td style="padding:6px 8px;border-bottom:0.5px solid #eee;text-align:center">${u.tempo}</td><td style="padding:6px 8px;border-bottom:0.5px solid #eee;text-align:right;font-weight:700">Rp ${u.sisa.toLocaleString('id-ID')}</td></tr>`).join('')}
+            ${sisaBaris>0?`<tr><td colspan="3" style="padding:6px 8px;text-align:center;color:#888">…dan ${sisaBaris} nota lainnya</td></tr>`:''}
+          </table>`:''}
+          <div style="font-size:11px;color:#666;text-align:center;border-top:1px dashed #ccc;padding-top:10px;line-height:1.6">
+            Mohon konfirmasi kembali apabila sudah melakukan pembayaran 🙏<br>Terima kasih atas kepercayaannya — ${tokoNama}
+          </div>
+        </div>`;
+      document.body.appendChild(el);
+      await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+      const canvas = await window.html2canvas(el, {scale:2, backgroundColor:'#ffffff', useCORS:true, width:480});
+      document.body.removeChild(el); el = null;
+      const blob = await new Promise(res=>canvas.toBlob(res,'image/png'));
+      const imageFile = blob ? new File([blob], `tagihan-${cust.name.replace(/[^a-z0-9]/gi,'-')}.png`, {type:'image/png'}) : null;
+
+      if(imageFile && navigator.canShare && navigator.canShare({files:[imageFile]})) {
+        try { await navigator.share({files:[imageFile], title:`Tagihan ${cust.name}`, text:`Pengingat tagihan dari ${tokoNama}`}); setSharingTagihan(false); return; }
+        catch(e){ if(e.name==='AbortError'){ setSharingTagihan(false); return; } }
+      }
+      if(imageFile) {
+        const url = URL.createObjectURL(imageFile);
+        const a = document.createElement('a');
+        a.href = url; a.download = imageFile.name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url), 5000);
+        alert('📥 Gambar tagihan tersimpan ke perangkat!\n\nBrowser ini belum bisa langsung share gambar — buka WhatsApp lalu lampirkan gambar yang baru diunduh.');
+        setSharingTagihan(false); return;
+      }
+      throw new Error('gagal membuat gambar');
+    } catch(err) {
+      if(el&&el.parentNode) el.parentNode.removeChild(el);
+      // Fallback teks WA
+      const lines = [`📋 *PENGINGAT TAGIHAN — ${tokoNama}*`,'',`Kepada Yth *${cust.name}*,`,`Total tagihan berjalan: *Rp ${(cust.sisa||0).toLocaleString('id-ID')}* (${unpaid.length} nota)`,'','Mohon konfirmasi kembali apabila sudah melakukan pembayaran 🙏'];
+      window.open('https://wa.me/?text='+encodeURIComponent(lines.join('\n')),'_blank');
+      setSharingTagihan(false);
+    }
+  };
+
   // ── Deep-link dari halaman lain (mis. detail pelanggan/supplier di Manajemen):
   // buka langsung pihak & invoice yang diminta begitu data selesai dimuat ──
   const targetConsumed = React.useRef(false);
@@ -7092,6 +7170,12 @@ function HutangPiutang({initialTarget, onConsumeTarget}={}) {
             <button onClick={()=>lunasiSekaligus(selectedCustomer)}
               style={{width:'100%',padding:12,background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:800,fontSize:14,cursor:'pointer'}}>
               ✅ Lunasi Sekaligus
+            </button>
+          )}
+          {masihPiutang.length>0&&(
+            <button onClick={()=>bagikanTagihan(selectedCustomer)} disabled={sharingTagihan}
+              style={{width:'100%',padding:11,background:'#fff',color:'#25D366',border:'1.5px solid #25D366',borderRadius:10,fontWeight:800,fontSize:13,cursor:'pointer',marginTop:8}}>
+              {sharingTagihan?'⏳ Menyiapkan gambar...':'📤 Kirim Tagihan (Gambar/WA)'}
             </button>
           )}
         </div>
