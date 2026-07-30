@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-EDITPODISKON";
+const APP_VERSION = "v14.07.2026-REUPLOAD1";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -2120,6 +2120,29 @@ function PanelKanan({cart, setCart, updateQty, updatePrice, clearCart, onSuccess
             <div style={{fontSize:10,color:MT,marginTop:4}}>Reminder otomatis muncul saat mendekati jatuh tempo</div>
           </div>
         )}
+
+        {/* Estimasi Untung — cuma di panel proses bayar */}
+        {(()=>{
+          let untung = 0, adaTanpaModal = false;
+          cart.forEach(item=>{
+            const konv = item._unitBesar ? (item._konversi||1) : 1;
+            const pcsTotal = (parseQty(item.qty)||0) * konv;
+            const biayaTotal = pcsTotal * (item.buy_price||0);
+            const pendapatanTotal = (parseQty(item.qty)||0) * (item.price||0);
+            if(!item.buy_price) adaTanpaModal = true;
+            untung += pendapatanTotal - biayaTotal;
+          });
+          if(cart.length===0) return null;
+          return (
+            <div style={{padding:'10px 14px',background:untung>=0?GL:'#FFF0F0',borderRadius:10,border:`1px solid ${untung>=0?G:RD}`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:12,fontWeight:600,color:untung>=0?GD:RD}}>📈 Estimasi Untung</span>
+                <span style={{fontSize:15,fontWeight:800,color:untung>=0?GD:RD}}>{fmt(untung)}</span>
+              </div>
+              {adaTanpaModal&&<div style={{fontSize:9,color:MT,marginTop:3}}>*ada produk yang belum diisi harga beli, untung sebenarnya bisa beda</div>}
+            </div>
+          );
+        })()}
 
         {/* Tombol Bayar */}
         <button onClick={processPayment}
