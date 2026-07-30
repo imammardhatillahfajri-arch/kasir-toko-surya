@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-REUPLOAD1";
+const APP_VERSION = "v14.07.2026-MODALSTOK";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -5137,6 +5137,8 @@ function ManajemenStok() {
   const [showManStok, setShowManStok] = useState(false);
   const [showLogBarang, setShowLogBarang] = useState(null);
   const [showStokDetail, setShowStokDetail] = useState(null);
+  const [groupByCategory, setGroupByCategory] = useState(false);
+  const [collapsedCat, setCollapsedCat] = useState(new Set());
 
   const load = useCallback(async() => {
     setLoading(true); setError(null);
@@ -5153,6 +5155,29 @@ function ManajemenStok() {
   if(notifFilter==='habis') baseList = stokHabisList;
   else if(notifFilter==='menipis') baseList = stokMenipisList;
   const filtered = baseList.filter(p => smartMatch(search, p.name, p.category||''));
+
+  // Modal (nilai stok) per item = stok × harga beli. Produk non-stok (jasa dll) tidak dihitung.
+  const modalItem = (p) => (p.pakai_stok!==false ? (p.stock||0)*(p.buy_price||0) : 0);
+  const totalModalFiltered = filtered.reduce((s,p)=>s+modalItem(p),0);
+  const adaTanpaHargaBeli  = filtered.some(p=>p.pakai_stok!==false && !p.buy_price);
+
+  // Kelompokkan per kategori utama (level pertama sebelum " > "), urut dari modal terbesar
+  const grupKategori = React.useMemo(()=>{
+    const map = {};
+    filtered.forEach(p=>{
+      const kat = (p.category||'Tanpa Kategori').split(' > ')[0] || 'Tanpa Kategori';
+      if(!map[kat]) map[kat] = {nama:kat, items:[], modal:0};
+      map[kat].items.push(p);
+      map[kat].modal += modalItem(p);
+    });
+    return Object.values(map).sort((a,b)=>b.modal-a.modal);
+  },[filtered]);
+
+  const toggleCollapse = (kat) => setCollapsedCat(prev=>{
+    const next = new Set(prev);
+    if(next.has(kat)) next.delete(kat); else next.add(kat);
+    return next;
+  });
 
   const refreshAksi = async(id) => {
     await load();
@@ -5192,7 +5217,20 @@ function ManajemenStok() {
         </button>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Cari nama atau kode barang"
           style={{flex:1, padding:'10px 14px', border:'1.5px solid #eee', borderRadius:8, fontSize:14, outline:'none'}}/>
+        <button onClick={()=>setGroupByCategory(v=>!v)}
+          style={{flexShrink:0,padding:'10px 14px',background:groupByCategory?G:'#F5F6FA',color:groupByCategory?'#fff':TX,border:`1.5px solid ${groupByCategory?G:'#eee'}`,borderRadius:10,cursor:'pointer',fontSize:13,fontWeight:700,whiteSpace:'nowrap'}}>
+          📊 Kategori
+        </button>
       </div>
+
+      {/* Ringkasan modal — muncul otomatis saat sedang mencari/filter */}
+      {(search||notifFilter)&&filtered.length>0&&(
+        <div style={{background:'linear-gradient(135deg,#EDE7F6,#F3E5F5)',border:'1.5px solid #8E44AD',borderRadius:12,padding:'12px 16px',marginBottom:12}}>
+          <div style={{fontSize:11,color:'#7B1FA2',fontWeight:600,marginBottom:2}}>💰 Total Modal — {filtered.length} item{search?` cocok "${search}"`:''}</div>
+          <div style={{fontSize:22,fontWeight:800,color:'#5E35B1'}}>{fmt(totalModalFiltered)}</div>
+          {adaTanpaHargaBeli&&<div style={{fontSize:10,color:'#7B1FA2',marginTop:4}}>⚠️ Sebagian item belum ada Harga Beli — belum ikut terhitung di atas</div>}
+        </div>
+      )}
 
       {notifFilter&&(
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:notifFilter==='habis'?'#FFF0F0':'#FFF3D6',border:`1.5px solid ${notifFilter==='habis'?RD:OR}`,borderRadius:10,padding:'9px 14px',marginBottom:12,fontSize:12,fontWeight:700,color:notifFilter==='habis'?RD:OR}}>
@@ -5201,7 +5239,55 @@ function ManajemenStok() {
         </div>
       )}
 
-      {loading ? <Loading/> : (
+      {loading ? <Loading/> : groupByCategory ? (
+        <div>
+          {grupKategori.length===0 && <div style={{textAlign:'center', padding:'32px 0', color:MT,background:'#fff',borderRadius:12}}>Tidak ada barang ditemukan.</div>}
+          {grupKategori.map(grup=>{
+            const isCollapsed = collapsedCat.has(grup.nama);
+            return (
+              <div key={grup.nama} style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)',marginBottom:10}}>
+                <div onClick={()=>toggleCollapse(grup.nama)}
+                  style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',background:'#F5F6FA',cursor:'pointer'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:12,color:MT,transform:isCollapsed?'rotate(-90deg)':'none',display:'inline-block',transition:'transform 0.15s'}}>▾</span>
+                    <span style={{fontWeight:700,fontSize:14}}>{CAT_ICONS[grup.nama]||'📦'} {grup.nama}</span>
+                    <span style={{fontSize:11,color:MT,background:'#fff',borderRadius:10,padding:'2px 8px'}}>{grup.items.length} item</span>
+                  </div>
+                  <div style={{fontWeight:800,fontSize:14,color:'#5E35B1'}}>{fmt(grup.modal)}</div>
+                </div>
+                {!isCollapsed && grup.items.map((p,i)=>{
+                  const lowStock = (p.stok_minimum||0)>0 && p.stock>0 && p.stock<=p.stok_minimum;
+                  const habis = p.pakai_stok!==false && (p.stock||0)<=0;
+                  return (
+                    <div key={p.id} onClick={()=>setAksiProduct(p)}
+                      style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderTop:'1px solid #f0f0f0',cursor:'pointer'}}>
+                      <div style={{width:44,height:44,borderRadius:10,background:'#F5F6FA',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,overflow:'hidden'}}>
+                        {p.foto_url ? <img src={p.foto_url} style={{width:'100%',height:'100%',objectFit:'cover'}}/> : (CAT_ICONS[(p.category||'').split(' > ')[1]]||'📦')}
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:600,fontSize:14,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                          {p.name}
+                          {habis&&<span style={{fontSize:9,fontWeight:700,color:RD,background:'#FFF0F0',borderRadius:5,padding:'1px 6px'}}>Stok Habis</span>}
+                          {!habis&&lowStock&&<span style={{fontSize:9,fontWeight:700,color:OR,background:'#FFF3D6',borderRadius:5,padding:'1px 6px'}}>Stok Menipis</span>}
+                        </div>
+                        {p.buy_price>0&&(
+                          <div style={{display:'inline-block',fontSize:10,color:MT,background:'#F5F6FA',borderRadius:5,padding:'2px 7px',marginTop:4}}>
+                            Modal: {fmt(modalItem(p))} ({p.stock} × {fmt(p.buy_price)})
+                          </div>
+                        )}
+                      </div>
+                      <div style={{textAlign:'right',flexShrink:0}}>
+                        <div style={{fontWeight:800,fontSize:15,color:habis?RD:lowStock?OR:G}}>{p.stock}</div>
+                        <div style={{fontSize:12,color:MT}}>{fmt(p.price)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
         <div style={{background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
           {filtered.length===0 && <div style={{textAlign:'center', padding:'32px 0', color:MT}}>Tidak ada barang ditemukan.</div>}
           {filtered.map((p,i)=>{
@@ -5222,7 +5308,7 @@ function ManajemenStok() {
                   {p.barcode&&<div style={{fontSize:11,color:MT,marginTop:1}}>{p.barcode}</div>}
                   {p.buy_price>0&&(
                     <div style={{display:'inline-block',fontSize:10,color:MT,background:'#F5F6FA',borderRadius:5,padding:'2px 7px',marginTop:4}}>
-                      Hrg Beli Terakhir {fmt(p.buy_price)}
+                      Modal: {fmt(modalItem(p))} ({p.stock} × {fmt(p.buy_price)})
                     </div>
                   )}
                 </div>
