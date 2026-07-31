@@ -177,6 +177,47 @@ PENTING soal isi_per_satuan: sama seperti nota pembelian, kalau nama produk ada 
       return res.status(200).json(parsed);
     }
 
+    // ── MODE: BACA CATATAN STOK OPNAME (foto catatan hitung fisik manual) ──
+    if (body.stockOpnameMode) {
+      const { base64, mediaType } = body;
+      const result = await callAnthropic({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4000,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text', text: `Kamu adalah asisten toko listrik & bangunan di Indonesia. Ini adalah foto CATATAN STOK OPNAME — tulisan tangan atau ketikan berisi hasil hitung fisik barang di toko, biasanya berupa daftar nama barang + jumlah yang dihitung. Tulisan tangan mungkin tidak rapi — baca sebaik mungkin, dan tetap sertakan baris yang tulisannya kurang jelas (isi nama sesuai perkiraan terbaik, jangan dilewati).
+
+Kembalikan HANYA JSON tanpa markdown:
+{
+  "items": [
+    {"nama": "nama barang sesuai tulisan", "qty_fisik": angka hasil hitung, "satuan": "pcs/meter/dus/dll jika tertulis, kosongkan jika tidak ada"}
+  ]
+}
+
+Aturan: qty_fisik adalah angka HASIL HITUNG FISIK di toko (bukan harga, bukan kode barang). Kalau satu baris ada coretan/revisi angka, ambil angka yang PALING TERAKHIR/tidak dicoret. Kalau ada baris yang jelas bukan nama barang (misal judul, tanggal, paraf), lewati baris itu.` }
+          ]
+        }]
+      });
+
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return res.status(500).json({ error: data.error?.message || 'API error' });
+      }
+      const text = data.content?.[0]?.text || '';
+      const clean = text.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
+
+      let parsed;
+      try { parsed = JSON.parse(clean); }
+      catch(e) {
+        const m = clean.match(/[{][\s\S]*[}]/);
+        if(m) parsed = JSON.parse(m[0]);
+        else throw new Error('AI tidak bisa membaca catatan stok opname ini');
+      }
+      return res.status(200).json(parsed);
+    }
+
     // ── MODE: ANALYZE NOTA PEMBELIAN (foto faktur/nota dari supplier) ──
     const { base64, mediaType } = body;
     const result = await callAnthropic({
