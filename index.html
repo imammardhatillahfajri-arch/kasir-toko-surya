@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-MODALSTOK";
+const APP_VERSION = "v14.07.2026-STOKOPNAMEAI";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3335,6 +3335,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
   if(view==='cekKonversi') return <CekKonversiTool onBack={()=>{setView('list');load();}}/>;
   if(view==='bersihkanSatuan') return <BersihkanSatuanGandaTool onBack={()=>{setView('list');load();}}/>;
   if(view==='updateHargaSupplier') return <UpdateHargaSupplierAI onBack={()=>{setView('list');load();}}/>;
+  if(view==='stockOpname') return <StockOpnameAI onBack={()=>{setView('list');load();}}/>;
   if(view==='pelanggan' && selectedProduct)   return <PelangganBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
   if(view==='supplier' && selectedProduct)    return <SupplierBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
 
@@ -3394,6 +3395,11 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
           style={{padding:"11px 14px",background:'#E3F2FD',color:'#1976D2',border:'1.5px solid #3498DB',borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
           title="Update Harga dari Supplier (AI)">
           📋
+        </button>
+        <button onClick={()=>setView('stockOpname')}
+          style={{padding:"11px 14px",background:'#E8F5E9',color:GD,border:`1.5px solid ${G}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
+          title="Stok Opname (AI)">
+          🧮
         </button>
       </div>
       {bulkMode&&(
@@ -3796,6 +3802,232 @@ function CekKonversiTool({onBack}) {
 
 // ── Alat Bersihkan Data Satuan Ganda — cari produk yang punya 2 sistem satuan sekaligus ─
 // ── Alat Update Harga dari Daftar Harga Supplier (AI) — foto atau PDF ──────
+// ── Alat Stok Opname (AI) — scan catatan hitung fisik manual, cocokkan ke DB ─
+function StockOpnameAI({onBack}) {
+  const [step, setStep] = useState('upload'); // upload | loading | review
+  const [file, setFile] = useState(null);
+  const [filePreview, setFilePreview] = useState(null);
+  const [error, setError] = useState('');
+  const [items, setItems] = useState([]);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState({done:0,total:0});
+
+  const handleFile = (f) => {
+    if(!f) return;
+    if(!f.type.startsWith('image/')) return setError('File harus berupa gambar (foto catatan)!');
+    if(f.size > 15*1024*1024) return setError('Ukuran file maksimal 15MB!');
+    setFile(f); setError('');
+    const reader = new FileReader(); reader.onload = e=>setFilePreview(e.target.result); reader.readAsDataURL(f);
+  };
+
+  const analyze = async() => {
+    if(!file) return;
+    setStep('loading'); setError('');
+    try {
+      const base64 = await new Promise((res,rej)=>{
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result.split(',')[1]);
+        reader.onerror = rej;
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch('/api/analyze-nota', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ stockOpnameMode: true, base64, mediaType: file.type })
+      });
+      if(!response.ok) {
+        const errData = await response.json().catch(()=>({error:'Server error'}));
+        throw new Error(errData.error || `Error ${response.status}`);
+      }
+      const parsed = await response.json();
+
+      const allProducts = window._cachedProducts?.length ? window._cachedProducts : await sbGetAll('products',{order:'name'});
+      window._cachedProducts = allProducts;
+
+      const matched = (parsed.items||[]).map((it,idx)=>{
+        const nama = (it.nama||'').toUpperCase();
+        let best = null, bestScore = -999;
+        allProducts.forEach(p=>{
+          const s = productMatchScore(nama, p.name);
+          if(s>bestScore){ bestScore=s; best=p; }
+        });
+        const isMatch = best && bestScore>=40;
+        return {
+          id: idx,
+          nama,
+          qtyFisik: parseFloat(it.qty_fisik)||0,
+          satuan: it.satuan||'',
+          product_id: isMatch ? best.id : null,
+          matched_name: isMatch ? best.name : null,
+          stokSistem: isMatch ? (best.stock||0) : null,
+        };
+      });
+      setItems(matched);
+      setSelectedIds(new Set(matched.filter(m=>m.product_id).map(m=>m.id)));
+      setStep('review');
+    } catch(e){ setError(e.message); setStep('upload'); }
+  };
+
+  const toggleSelect = (id) => setSelectedIds(prev=>{
+    const next = new Set(prev);
+    if(next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const gantiProduk = (id, productId) => {
+    const prod = (window._cachedProducts||[]).find(p=>p.id===parseInt(productId));
+    setItems(prev=>prev.map(it=>it.id===id?{...it, product_id: prod?prod.id:null, matched_name: prod?prod.name:null, stokSistem: prod?(prod.stock||0):null}:it));
+    if(productId) setSelectedIds(prev=>new Set(prev).add(id));
+  };
+
+  const terapkan = async() => {
+    const targets = items.filter(it=>selectedIds.has(it.id) && it.product_id);
+    if(targets.length===0) return alert('Pilih minimal 1 produk yang sudah cocok dengan database!');
+    const adaSelisih = targets.filter(t=>t.qtyFisik!==t.stokSistem).length;
+    if(!confirm(`Update stok ${targets.length} produk sesuai hasil hitung fisik?\n${adaSelisih} di antaranya beda dari stok sistem saat ini.\n\nStok sistem akan diganti jadi angka hasil hitung fisik.`)) return;
+    setSaving(true);
+    setProgress({done:0,total:targets.length});
+    try {
+      for(let i=0;i<targets.length;i++){
+        const t = targets[i];
+        const before = t.stokSistem||0;
+        const after  = t.qtyFisik;
+        if(before!==after){
+          await sbUpdate('products', t.product_id, {stock: after});
+          await sbInsert('stock_logs',[{
+            product_id: t.product_id, type: after>before?'masuk':'keluar',
+            qty: Math.abs(after-before), stock_before: before, stock_after: after,
+            notes: 'Stok Opname (AI) — hasil hitung fisik',
+          }]).catch(()=>{});
+        }
+        setProgress({done:i+1,total:targets.length});
+      }
+      alert(`✅ Stok ${targets.length} produk berhasil disesuaikan!`);
+      onBack();
+    } catch(e){ alert(`Gagal di tengah proses: ${e.message}\n(${progress.done}/${targets.length} berhasil sebelum error)`); }
+    setSaving(false);
+  };
+
+  const matchedCount = items.filter(it=>it.product_id).length;
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto',paddingBottom:100}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>📋 Stok Opname (AI)</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:16}}>Foto catatan hasil hitung stok fisik toko (tulisan tangan/ketikan) — AI baca nama & jumlahnya, cocokkan ke produk di database, lalu bandingkan dengan stok sistem sebelum diterapkan.</div>
+
+      {step==='upload' && (
+        <>
+          {error&&<div style={{background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,padding:'8px 12px',fontSize:12,color:RD,marginBottom:12}}>{error}</div>}
+          {filePreview && (
+            <img src={filePreview} style={{width:'100%',maxHeight:280,objectFit:'contain',borderRadius:10,marginBottom:10,background:'#F5F6FA'}}/>
+          )}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+            <label style={{padding:'16px 10px',background:GL,border:`1.5px solid ${G}`,borderRadius:12,textAlign:'center',cursor:'pointer'}}>
+              <div style={{fontSize:24}}>📷</div>
+              <div style={{fontWeight:700,fontSize:12,color:GD,marginTop:4}}>Kamera</div>
+              <input type="file" accept="image/*" capture="environment" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+            </label>
+            <label style={{padding:'16px 10px',background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:12,textAlign:'center',cursor:'pointer'}}>
+              <div style={{fontSize:24}}>🖼️</div>
+              <div style={{fontWeight:700,fontSize:12,color:'#1976D2',marginTop:4}}>Galeri</div>
+              <input type="file" accept="image/*" onChange={e=>handleFile(e.target.files[0])} style={{display:'none'}}/>
+            </label>
+          </div>
+          {file&&(
+            <button onClick={analyze} style={{width:'100%',padding:13,background:G,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
+              🤖 Baca Catatan dengan AI
+            </button>
+          )}
+        </>
+      )}
+
+      {step==='loading' && (
+        <div style={{textAlign:'center',padding:40}}>
+          <Loading/>
+          <div style={{fontSize:13,color:MT,marginTop:10}}>AI sedang membaca catatan stok opname... bisa agak lama kalau daftarnya panjang.</div>
+        </div>
+      )}
+
+      {step==='review' && (
+        <>
+          <div style={{background:'#E3F2FD',border:'1px solid #3498DB',borderRadius:10,padding:'10px 12px',marginBottom:12,fontSize:12,color:'#1976D2'}}>
+            📦 {items.length} item terbaca — <b>{matchedCount} cocok otomatis</b> ke produk di database, {items.length-matchedCount} perlu dicocokkan manual.
+          </div>
+
+          {items.map(item=>{
+            const selisih = item.product_id ? item.qtyFisik - (item.stokSistem||0) : null;
+            const adaSelisih = selisih!==null && selisih!==0;
+            return (
+              <div key={item.id} style={{background:item.product_id?'#fff':'#FFF8E1',border:item.product_id?'1px solid #eee':`1.5px solid ${OR}`,borderRadius:10,padding:12,marginBottom:8}}>
+                <div style={{display:'flex',gap:8,marginBottom:8}}>
+                  {item.product_id&&(
+                    <input type="checkbox" checked={selectedIds.has(item.id)} onChange={()=>toggleSelect(item.id)}
+                      style={{width:18,height:18,accentColor:G,flexShrink:0,marginTop:8}}/>
+                  )}
+                  <input value={item.nama} onChange={e=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,nama:e.target.value}:it))}
+                    placeholder="Nama barang"
+                    style={{flex:1,padding:'7px 10px',border:`1.5px solid ${item.product_id?G:'#eee'}`,borderRadius:8,fontSize:13,fontWeight:700,boxSizing:'border-box'}}/>
+                  <button onClick={()=>setItems(prev=>prev.filter(it=>it.id!==item.id))}
+                    style={{padding:'7px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,cursor:'pointer',color:RD,fontSize:12,flexShrink:0}}>🗑️</button>
+                </div>
+
+                {item.product_id ? (
+                  <div style={{marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',background:GL,borderRadius:8,padding:'5px 10px'}}>
+                    <div style={{fontSize:11,color:GD,fontWeight:600}}>✅ Cocok dengan: {item.matched_name}</div>
+                    <button onClick={()=>{ setItems(prev=>prev.map(it=>it.id===item.id?{...it,product_id:null,matched_name:null,stokSistem:null}:it)); setSelectedIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;}); }}
+                      style={{fontSize:10,color:MT,background:'none',border:'none',cursor:'pointer'}}>Batalkan</button>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{fontSize:11,color:OR,marginBottom:4}}>⚠️ Belum ketemu produknya di database</div>
+                    <select onChange={e=>gantiProduk(item.id, e.target.value)} defaultValue=""
+                      style={{width:'100%',padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,marginBottom:6,background:'#fff'}}>
+                      <option value="">-- Cocokkan ke produk --</option>
+                      {(window._cachedProducts||[]).slice(0,500).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </>
+                )}
+
+                <div style={{display:'grid',gridTemplateColumns:item.product_id?'1fr 1fr':'1fr',gap:8,marginBottom:item.product_id?6:0}}>
+                  <div>
+                    <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty Hasil Hitung Fisik{item.satuan?` (${item.satuan})`:''}</label>
+                    <input type="number" value={item.qtyFisik} onChange={e=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,qtyFisik:parseFloat(e.target.value)||0}:it))}
+                      style={{width:'100%',padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                  </div>
+                  {item.product_id&&(
+                    <div>
+                      <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Stok Sistem Saat Ini</label>
+                      <div style={{padding:'7px 8px',background:'#F5F6FA',borderRadius:7,fontSize:12,fontWeight:700,color:TX}}>{item.stokSistem}</div>
+                    </div>
+                  )}
+                </div>
+
+                {item.product_id&&(
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:adaSelisih?'#FFF3D6':'#F5F6FA',borderRadius:7,padding:'6px 10px'}}>
+                    <span style={{fontSize:11,color:MT}}>Selisih</span>
+                    <span style={{fontSize:13,fontWeight:800,color:selisih>0?GD:selisih<0?RD:MT}}>
+                      {selisih>0?'+':''}{selisih} {adaSelisih?(selisih>0?'(lebih)':'(kurang)'):'(sesuai)'}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          <div style={{position:'fixed',bottom:64,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,maxWidth:600,margin:'0 auto'}}>
+            {saving&&<div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:8}}>⏳ Mengupdate {progress.done}/{progress.total}...</div>}
+            <button onClick={terapkan} disabled={saving}
+              style={{width:'100%',padding:13,background:saving?MT:G,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
+              {saving?'⏳ Mengupdate...':`💾 Terapkan ke Stok — ${selectedIds.size} Produk`}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function UpdateHargaSupplierAI({onBack}) {
   const [step, setStep] = useState('upload'); // upload | loading | review
   const [file, setFile] = useState(null);
