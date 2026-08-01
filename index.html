@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-KOMPRESFOTOAI";
+const APP_VERSION = "v14.07.2026-OPNAMESEARCH";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3839,6 +3839,8 @@ function StockOpnameAI({onBack}) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState({done:0,total:0});
+  const [pickerOpenFor, setPickerOpenFor] = useState(null); // id item yang lagi buka pencarian produk
+  const [pickerSearch, setPickerSearch] = useState('');
 
   const handleFile = (f) => {
     if(!f) return;
@@ -3880,6 +3882,11 @@ function StockOpnameAI({onBack}) {
           if(s>bestScore){ bestScore=s; best=p; }
         });
         const isMatch = best && bestScore>=40;
+        const satuanNota = (it.satuan||'').toLowerCase();
+        // Kalau produk yang cocok punya satuan besar (dus/roll/dll) dan itu yang tertulis di catatan, default ke Unit Besar
+        const prodUnitBesar = isMatch ? (best.unit_besar||'').toLowerCase() : '';
+        const cocokUnitBesar = isMatch && prodUnitBesar && prodUnitBesar!=='pcs' && satuanNota &&
+                                (satuanNota===prodUnitBesar || satuanNota.includes(prodUnitBesar) || prodUnitBesar.includes(satuanNota));
         return {
           id: idx,
           nama,
@@ -3888,6 +3895,8 @@ function StockOpnameAI({onBack}) {
           product_id: isMatch ? best.id : null,
           matched_name: isMatch ? best.name : null,
           stokSistem: isMatch ? (best.stock||0) : null,
+          tipe_unit: cocokUnitBesar ? 'besar' : 'kecil',
+          isi_per_satuan: cocokUnitBesar ? (best.konversi||1) : '',
         };
       });
       setItems(matched);
@@ -3907,16 +3916,22 @@ function StockOpnameAI({onBack}) {
     return next;
   });
 
-  const gantiProduk = (id, productId) => {
-    const prod = (window._cachedProducts||[]).find(p=>p.id===parseInt(productId));
+  const gantiProduk = (id, prod) => {
     setItems(prev=>prev.map(it=>it.id===id?{...it, product_id: prod?prod.id:null, matched_name: prod?prod.name:null, stokSistem: prod?(prod.stock||0):null}:it));
-    if(productId) setSelectedIds(prev=>new Set(prev).add(id));
+    if(prod) setSelectedIds(prev=>new Set(prev).add(id));
+    setPickerOpenFor(null); setPickerSearch('');
+  };
+
+  // Qty efektif dalam pcs — kalau dihitung pakai unit besar (dus/roll/dll), dikali isi per satuan
+  const qtyFisikEfektif = (item) => {
+    const k = parseFloat(item.isi_per_satuan)||0;
+    return (item.tipe_unit==='besar' && k>1) ? item.qtyFisik*k : item.qtyFisik;
   };
 
   const terapkan = async() => {
     const targets = items.filter(it=>selectedIds.has(it.id) && it.product_id);
     if(targets.length===0) return alert('Pilih minimal 1 produk yang sudah cocok dengan database!');
-    const adaSelisih = targets.filter(t=>t.qtyFisik!==t.stokSistem).length;
+    const adaSelisih = targets.filter(t=>qtyFisikEfektif(t)!==t.stokSistem).length;
     if(!confirm(`Update stok ${targets.length} produk sesuai hasil hitung fisik?\n${adaSelisih} di antaranya beda dari stok sistem saat ini.\n\nStok sistem akan diganti jadi angka hasil hitung fisik.`)) return;
     setSaving(true);
     setProgress({done:0,total:targets.length});
@@ -3924,7 +3939,7 @@ function StockOpnameAI({onBack}) {
       for(let i=0;i<targets.length;i++){
         const t = targets[i];
         const before = t.stokSistem||0;
-        const after  = t.qtyFisik;
+        const after  = qtyFisikEfektif(t);
         if(before!==after){
           await sbUpdate('products', t.product_id, {stock: after});
           await sbInsert('stock_logs',[{
@@ -3989,8 +4004,11 @@ function StockOpnameAI({onBack}) {
           </div>
 
           {items.map(item=>{
-            const selisih = item.product_id ? item.qtyFisik - (item.stokSistem||0) : null;
+            const efektif = qtyFisikEfektif(item);
+            const selisih = item.product_id ? efektif - (item.stokSistem||0) : null;
             const adaSelisih = selisih!==null && selisih!==0;
+            const isPickerOpen = pickerOpenFor===item.id;
+            const pickerResults = isPickerOpen ? (window._cachedProducts||[]).filter(p=>smartMatch(pickerSearch,p.name,p.category||'')).slice(0,40) : [];
             return (
               <div key={item.id} style={{background:item.product_id?'#fff':'#FFF8E1',border:item.product_id?'1px solid #eee':`1.5px solid ${OR}`,borderRadius:10,padding:12,marginBottom:8}}>
                 <div style={{display:'flex',gap:8,marginBottom:8}}>
@@ -4005,24 +4023,51 @@ function StockOpnameAI({onBack}) {
                     style={{padding:'7px 10px',background:'#FFF0F0',border:`1px solid ${RD}`,borderRadius:8,cursor:'pointer',color:RD,fontSize:12,flexShrink:0}}>🗑️</button>
                 </div>
 
-                {item.product_id ? (
+                {item.product_id && !isPickerOpen && (
                   <div style={{marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center',background:GL,borderRadius:8,padding:'5px 10px'}}>
                     <div style={{fontSize:11,color:GD,fontWeight:600}}>✅ Cocok dengan: {item.matched_name}</div>
-                    <button onClick={()=>{ setItems(prev=>prev.map(it=>it.id===item.id?{...it,product_id:null,matched_name:null,stokSistem:null}:it)); setSelectedIds(prev=>{const n=new Set(prev);n.delete(item.id);return n;}); }}
-                      style={{fontSize:10,color:MT,background:'none',border:'none',cursor:'pointer'}}>Batalkan</button>
+                    <button onClick={()=>{ setPickerOpenFor(item.id); setPickerSearch(''); }}
+                      style={{fontSize:10,color:MT,background:'none',border:'none',cursor:'pointer'}}>Ganti/Batalkan</button>
                   </div>
-                ) : (
-                  <>
+                )}
+                {!item.product_id && !isPickerOpen && (
+                  <div style={{marginBottom:6}}>
                     <div style={{fontSize:11,color:OR,marginBottom:4}}>⚠️ Belum ketemu produknya di database</div>
-                    <select onChange={e=>gantiProduk(item.id, e.target.value)} defaultValue=""
-                      style={{width:'100%',padding:'7px 8px',border:'1.5px solid #eee',borderRadius:7,fontSize:12,marginBottom:6,background:'#fff'}}>
-                      <option value="">-- Cocokkan ke produk --</option>
-                      {(window._cachedProducts||[]).slice(0,500).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                  </>
+                    <button onClick={()=>{ setPickerOpenFor(item.id); setPickerSearch(''); }}
+                      style={{width:'100%',padding:'8px 10px',background:'#fff',border:'1.5px solid #eee',borderRadius:7,fontSize:12,color:TX,cursor:'pointer',textAlign:'left'}}>
+                      🔍 Cari &amp; cocokkan produk...
+                    </button>
+                  </div>
+                )}
+                {isPickerOpen && (
+                  <div style={{marginBottom:6,background:'#F5F6FA',borderRadius:8,padding:8}}>
+                    <div style={{display:'flex',gap:6,marginBottom:6}}>
+                      <input autoFocus value={pickerSearch} onChange={e=>setPickerSearch(e.target.value)} placeholder="Ketik nama produk..."
+                        style={{flex:1,padding:'7px 9px',border:'1.5px solid #3498DB',borderRadius:7,fontSize:12,boxSizing:'border-box'}}/>
+                      <button onClick={()=>{setPickerOpenFor(null);setPickerSearch('');}}
+                        style={{padding:'7px 10px',background:'#eee',border:'none',borderRadius:7,cursor:'pointer',fontSize:12}}>✕</button>
+                    </div>
+                    <div style={{maxHeight:180,overflowY:'auto',background:'#fff',borderRadius:7,border:'1px solid #eee'}}>
+                      {item.product_id&&(
+                        <div onClick={()=>gantiProduk(item.id,null)}
+                          style={{padding:'8px 10px',fontSize:12,color:RD,cursor:'pointer',borderBottom:'1px solid #f5f5f5'}}>🚫 Batalkan pencocokan (tandai belum ketemu)</div>
+                      )}
+                      {pickerSearch.trim()==='' ? (
+                        <div style={{padding:'10px',fontSize:11,color:MT,textAlign:'center'}}>Ketik untuk mencari produk...</div>
+                      ) : pickerResults.length===0 ? (
+                        <div style={{padding:'10px',fontSize:11,color:MT,textAlign:'center'}}>Tidak ada produk cocok.</div>
+                      ) : pickerResults.map(p=>(
+                        <div key={p.id} onClick={()=>gantiProduk(item.id,p)}
+                          style={{padding:'8px 10px',fontSize:12,cursor:'pointer',borderBottom:'1px solid #f5f5f5'}}>
+                          <div style={{fontWeight:600}}>{p.name}</div>
+                          <div style={{fontSize:10,color:MT}}>Stok sistem: {p.stock} {p.unit_kecil||'pcs'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
 
-                <div style={{display:'grid',gridTemplateColumns:item.product_id?'1fr 1fr':'1fr',gap:8,marginBottom:item.product_id?6:0}}>
+                <div style={{display:'grid',gridTemplateColumns:item.product_id?'1fr 1fr':'1fr',gap:8,marginBottom:6}}>
                   <div>
                     <label style={{fontSize:10,color:MT,fontWeight:600,display:'block',marginBottom:2}}>Qty Hasil Hitung Fisik{item.satuan?` (${item.satuan})`:''}</label>
                     <input type="number" value={item.qtyFisik} onChange={e=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,qtyFisik:parseFloat(e.target.value)||0}:it))}
@@ -4037,12 +4082,31 @@ function StockOpnameAI({onBack}) {
                 </div>
 
                 {item.product_id&&(
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:adaSelisih?'#FFF3D6':'#F5F6FA',borderRadius:7,padding:'6px 10px'}}>
-                    <span style={{fontSize:11,color:MT}}>Selisih</span>
-                    <span style={{fontSize:13,fontWeight:800,color:selisih>0?GD:selisih<0?RD:MT}}>
-                      {selisih>0?'+':''}{selisih} {adaSelisih?(selisih>0?'(lebih)':'(kurang)'):'(sesuai)'}
-                    </span>
-                  </div>
+                  <>
+                    <div style={{display:'flex',gap:6,marginBottom:6}}>
+                      {['kecil','besar'].map(t=>(
+                        <button key={t} onClick={()=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,tipe_unit:t}:it))}
+                          style={{flex:1,padding:'5px 4px',border:`1.5px solid ${item.tipe_unit===t?(t==='besar'?'#8E44AD':G):'#eee'}`,borderRadius:7,background:item.tipe_unit===t?(t==='besar'?'#F3E5F5':GL):'#fff',color:item.tipe_unit===t?(t==='besar'?'#8E44AD':GD):MT,cursor:'pointer',fontSize:10,fontWeight:700}}>
+                          {t==='besar'?'🎁 Dihitung per Unit Besar':'📦 Dihitung per Pcs'}
+                        </button>
+                      ))}
+                    </div>
+                    {item.tipe_unit==='besar'&&(
+                      <div style={{background:'#F3E5F5',borderRadius:7,padding:'6px 8px',marginBottom:6}}>
+                        <label style={{fontSize:10,color:'#7B1FA2',fontWeight:600,display:'block',marginBottom:2}}>Isi per {item.satuan||'unit besar'} (berapa pcs?)</label>
+                        <input type="number" value={item.isi_per_satuan} placeholder="mis. 12"
+                          onChange={e=>setItems(prev=>prev.map(it=>it.id===item.id?{...it,isi_per_satuan:e.target.value}:it))}
+                          style={{width:'100%',padding:'6px 8px',border:'1.5px solid #8E44AD',borderRadius:6,fontSize:12,fontWeight:700,boxSizing:'border-box',marginBottom:4}}/>
+                        <div style={{fontSize:10,color:'#7B1FA2'}}>= <b>{efektif}</b> pcs total ({item.qtyFisik} × {item.isi_per_satuan||0})</div>
+                      </div>
+                    )}
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:adaSelisih?'#FFF3D6':'#F5F6FA',borderRadius:7,padding:'6px 10px'}}>
+                      <span style={{fontSize:11,color:MT}}>Selisih (pcs)</span>
+                      <span style={{fontSize:13,fontWeight:800,color:selisih>0?GD:selisih<0?RD:MT}}>
+                        {selisih>0?'+':''}{selisih} {adaSelisih?(selisih>0?'(lebih)':'(kurang)'):'(sesuai)'}
+                      </span>
+                    </div>
+                  </>
                 )}
               </div>
             );
