@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-OPNAMESEARCH";
+const APP_VERSION = "v14.07.2026-OPNAMETAMBAHPRODUK";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3363,6 +3363,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
   if(view==='bersihkanSatuan') return <BersihkanSatuanGandaTool onBack={()=>{setView('list');load();}}/>;
   if(view==='updateHargaSupplier') return <UpdateHargaSupplierAI onBack={()=>{setView('list');load();}}/>;
   if(view==='stockOpname') return <StockOpnameAI onBack={()=>{setView('list');load();}}/>;
+  if(view==='produkBelumOpname') return <ProdukBelumOpnameTool onBack={()=>{setView('list');load();}}/>;
   if(view==='pelanggan' && selectedProduct)   return <PelangganBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
   if(view==='supplier' && selectedProduct)    return <SupplierBarangView product={selectedProduct} onBack={()=>setView('detail')}/>;
 
@@ -3427,6 +3428,11 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
           style={{padding:"11px 14px",background:'#E8F5E9',color:GD,border:`1.5px solid ${G}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
           title="Stok Opname (AI)">
           🧮
+        </button>
+        <button onClick={()=>setView('produkBelumOpname')}
+          style={{padding:"11px 14px",background:'#FFF0F0',color:RD,border:`1.5px solid ${RD}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
+          title="Produk Belum Ter-opname">
+          🔎
         </button>
       </div>
       {bulkMode&&(
@@ -3830,6 +3836,135 @@ function CekKonversiTool({onBack}) {
 // ── Alat Bersihkan Data Satuan Ganda — cari produk yang punya 2 sistem satuan sekaligus ─
 // ── Alat Update Harga dari Daftar Harga Supplier (AI) — foto atau PDF ──────
 // ── Alat Stok Opname (AI) — scan catatan hitung fisik manual, cocokkan ke DB ─
+// ── Produk Belum Ter-opname — deteksi barang yang belum pernah ke-scan Stok
+// Opname AI sejak tanggal tertentu (kemungkinan udah gak ada fisiknya, tapi
+// masih nyangkut di database sehingga bikin modal tidak akurat) ────────────
+function ProdukBelumOpnameTool({onBack}) {
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sejakTanggal, setSejakTanggal] = useState(()=>{
+    const d = new Date(); d.setDate(d.getDate()-30);
+    return d.toISOString().slice(0,10);
+  });
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState({done:0,total:0});
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try { setProducts(await sbGetAll('products',{order:'name'})); }
+      catch(e){}
+      setLoading(false);
+    })();
+  },[]);
+
+  const belumOpname = products.filter(p=>{
+    if(p.pakai_stok===false) return false; // produk non-stok (jasa dll) tidak relevan
+    if(!p.last_opname_at) return true;
+    return p.last_opname_at.slice(0,10) < sejakTanggal;
+  });
+  const totalModal = belumOpname.reduce((s,p)=>s+(p.stock||0)*(p.buy_price||0),0);
+  const adaStok = belumOpname.filter(p=>(p.stock||0)>0);
+
+  const toggleSelect = (id) => setSelectedIds(prev=>{
+    const next = new Set(prev);
+    if(next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const pilihSemua = () => setSelectedIds(prev=>prev.size===adaStok.length ? new Set() : new Set(adaStok.map(p=>p.id)));
+
+  const nolkanStok = async() => {
+    const targets = adaStok.filter(p=>selectedIds.has(p.id));
+    if(targets.length===0) return alert('Pilih minimal 1 produk dulu!');
+    if(!confirm(`Set stok ${targets.length} produk jadi 0?\n\nProduknya TETAP ADA di database (gak dihapus) — cuma stok & modalnya jadi nol. Kalau nanti ternyata barangnya ketemu lagi, tinggal update stoknya balik manual.`)) return;
+    setSaving(true);
+    setProgress({done:0,total:targets.length});
+    try {
+      for(let i=0;i<targets.length;i++){
+        const p = targets[i];
+        await sbUpdate('products', p.id, {stock: 0});
+        await sbInsert('stock_logs',[{
+          product_id: p.id, type:'keluar', qty: p.stock||0, stock_before: p.stock||0, stock_after: 0,
+          notes: 'Stok Opname — tidak ditemukan saat hitung ulang, di-nolkan',
+        }]).catch(()=>{});
+        setProgress({done:i+1,total:targets.length});
+      }
+      alert(`✅ Stok ${targets.length} produk berhasil di-nolkan!`);
+      setProducts(prev=>prev.map(p=>targets.some(t=>t.id===p.id)?{...p,stock:0}:p));
+      setSelectedIds(new Set());
+    } catch(e){ alert(`Gagal di tengah proses: ${e.message}\n(${progress.done}/${targets.length} berhasil sebelum error)`); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:600,margin:'0 auto',paddingBottom:100}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🔎 Produk Belum Ter-opname</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:14}}>Produk yang belum pernah dikonfirmasi lewat Stok Opname AI sejak tanggal tertentu — kemungkinan sudah tidak ada fisiknya, tapi masih tercatat di sistem.</div>
+
+      <div style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Anggap "belum di-opname" kalau sejak tanggal:</label>
+        <input type="date" value={sejakTanggal} onChange={e=>setSejakTanggal(e.target.value)}
+          style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
+        <div style={{fontSize:10,color:MT,marginTop:4}}>Sesuaikan dengan kapan lo mulai proses hitung ulang stok toko.</div>
+      </div>
+
+      {loading ? <Loading/> : (
+        <>
+          <div style={{background:'linear-gradient(135deg,#FFF0F0,#FFF3D6)',border:`1.5px solid ${RD}`,borderRadius:12,padding:'12px 16px',marginBottom:14}}>
+            <div style={{fontSize:11,color:RD,fontWeight:600,marginBottom:2}}>⚠️ {belumOpname.length} produk belum ter-opname — {adaStok.length} di antaranya masih ada stok</div>
+            <div style={{fontSize:22,fontWeight:800,color:RD}}>{fmt(totalModal)}</div>
+            <div style={{fontSize:10,color:'#7d4e00',marginTop:2}}>Total modal yang nyangkut di produk-produk ini</div>
+          </div>
+
+          {adaStok.length>0 && (
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <button onClick={pilihSemua} style={{background:'none',border:'none',color:G,fontWeight:700,fontSize:12,cursor:'pointer',padding:0}}>
+                {selectedIds.size===adaStok.length?'☑️ Batalkan Semua':'☐ Pilih Semua'}
+              </button>
+              <span style={{fontSize:11,color:MT}}>{selectedIds.size} dipilih</span>
+            </div>
+          )}
+
+          <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+            {belumOpname.length===0 && <div style={{textAlign:'center',padding:32,color:MT}}>🎉 Semua produk sudah ter-opname!</div>}
+            {belumOpname.map((p,i)=>{
+              const modal = (p.stock||0)*(p.buy_price||0);
+              const takAdaStok = (p.stock||0)<=0;
+              return (
+                <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 14px',borderBottom:i<belumOpname.length-1?'1px solid #f0f0f0':'none',opacity:takAdaStok?0.55:1}}>
+                  {!takAdaStok&&(
+                    <input type="checkbox" checked={selectedIds.has(p.id)} onChange={()=>toggleSelect(p.id)}
+                      style={{width:18,height:18,accentColor:RD,flexShrink:0}}/>
+                  )}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                    <div style={{fontSize:11,color:MT,marginTop:1}}>
+                      Stok: {p.stock||0} {p.unit_kecil||'pcs'} {modal>0&&`· Modal: ${fmt(modal)}`}
+                      {p.last_opname_at&&` · Terakhir opname: ${p.last_opname_at.slice(0,10)}`}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {adaStok.length>0 && selectedIds.size>0 && (
+        <div style={{position:'fixed',bottom:64,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,maxWidth:600,margin:'0 auto'}}>
+          {saving&&<div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:8}}>⏳ Memproses {progress.done}/{progress.total}...</div>}
+          <button onClick={nolkanStok} disabled={saving}
+            style={{width:'100%',padding:13,background:saving?MT:RD,color:'#fff',border:'none',borderRadius:10,fontWeight:800,cursor:'pointer',fontSize:14}}>
+            {saving?'⏳ Memproses...':`0️⃣ Nolkan Stok — ${selectedIds.size} Produk`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StockOpnameAI({onBack}) {
   const [step, setStep] = useState('upload'); // upload | loading | review
   const [file, setFile] = useState(null);
@@ -3841,6 +3976,7 @@ function StockOpnameAI({onBack}) {
   const [progress, setProgress] = useState({done:0,total:0});
   const [pickerOpenFor, setPickerOpenFor] = useState(null); // id item yang lagi buka pencarian produk
   const [pickerSearch, setPickerSearch] = useState('');
+  const [showTambahProduk, setShowTambahProduk] = useState(null); // id item yang lagi bikin produk baru
 
   const handleFile = (f) => {
     if(!f) return;
@@ -3936,17 +4072,21 @@ function StockOpnameAI({onBack}) {
     setSaving(true);
     setProgress({done:0,total:targets.length});
     try {
+      const now = new Date().toISOString();
       for(let i=0;i<targets.length;i++){
         const t = targets[i];
         const before = t.stokSistem||0;
         const after  = qtyFisikEfektif(t);
         if(before!==after){
-          await sbUpdate('products', t.product_id, {stock: after});
+          await sbUpdate('products', t.product_id, {stock: after, last_opname_at: now});
           await sbInsert('stock_logs',[{
             product_id: t.product_id, type: after>before?'masuk':'keluar',
             qty: Math.abs(after-before), stock_before: before, stock_after: after,
             notes: 'Stok Opname (AI) — hasil hitung fisik',
           }]).catch(()=>{});
+        } else {
+          // Stok sudah sesuai — tetap tandai sebagai terkonfirmasi lewat opname
+          await sbUpdate('products', t.product_id, {last_opname_at: now}).catch(()=>{});
         }
         setProgress({done:i+1,total:targets.length});
       }
@@ -4034,8 +4174,12 @@ function StockOpnameAI({onBack}) {
                   <div style={{marginBottom:6}}>
                     <div style={{fontSize:11,color:OR,marginBottom:4}}>⚠️ Belum ketemu produknya di database</div>
                     <button onClick={()=>{ setPickerOpenFor(item.id); setPickerSearch(''); }}
-                      style={{width:'100%',padding:'8px 10px',background:'#fff',border:'1.5px solid #eee',borderRadius:7,fontSize:12,color:TX,cursor:'pointer',textAlign:'left'}}>
+                      style={{width:'100%',padding:'8px 10px',background:'#fff',border:'1.5px solid #eee',borderRadius:7,fontSize:12,color:TX,cursor:'pointer',textAlign:'left',marginBottom:6}}>
                       🔍 Cari &amp; cocokkan produk...
+                    </button>
+                    <button onClick={()=>setShowTambahProduk(item.id)}
+                      style={{width:'100%',padding:'8px 10px',background:'#E3F2FD',border:'1.5px solid #3498DB',borderRadius:7,fontSize:12,color:'#1976D2',cursor:'pointer',fontWeight:700}}>
+                      ➕ Tambah sebagai Produk Baru
                     </button>
                   </div>
                 )}
@@ -4120,6 +4264,22 @@ function StockOpnameAI({onBack}) {
             </button>
           </div>
         </>
+      )}
+
+      {showTambahProduk!==null&&(
+        <TambahProdukBaruModal
+          initialName={items.find(it=>it.id===showTambahProduk)?.nama||''}
+          initialHarga={0}
+          allProducts={window._cachedProducts||[]}
+          onClose={()=>setShowTambahProduk(null)}
+          onCreated={(newProd)=>{
+            const idx = showTambahProduk;
+            setItems(prev=>prev.map(it=>it.id===idx?{...it,product_id:newProd.id,matched_name:newProd.name,stokSistem:0}:it));
+            setSelectedIds(prev=>new Set(prev).add(idx));
+            setShowTambahProduk(null);
+            alert('✅ Produk baru berhasil ditambahkan! Jangan lupa lengkapi Harga Beli & Harga Jual di Edit Barang nanti.');
+          }}
+        />
       )}
     </div>
   );
