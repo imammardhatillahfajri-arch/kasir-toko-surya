@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-OPNAMETAMBAHPRODUK";
+const APP_VERSION = "v14.07.2026-OPNAMESAFEGUARD";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3850,17 +3850,27 @@ function ProdukBelumOpnameTool({onBack}) {
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState({done:0,total:0});
 
+  const [aktivitasIds, setAktivitasIds] = useState(new Set()); // product_id yang punya aktivitas stok apapun sejak cutoff
+
   useEffect(()=>{
     (async()=>{
       setLoading(true);
-      try { setProducts(await sbGetAll('products',{order:'name'})); }
-      catch(e){}
+      try {
+        const [prods, logs] = await Promise.all([
+          sbGetAll('products',{order:'name'}),
+          sbGetAll('stock_logs',{order:'created_at',asc:false}),
+        ]);
+        setProducts(prods||[]);
+        const recentLogs = (logs||[]).filter(l=>l.created_at?.slice(0,10)>=sejakTanggal);
+        setAktivitasIds(new Set(recentLogs.map(l=>l.product_id)));
+      } catch(e){}
       setLoading(false);
     })();
-  },[]);
+  },[sejakTanggal]);
 
   const belumOpname = products.filter(p=>{
     if(p.pakai_stok===false) return false; // produk non-stok (jasa dll) tidak relevan
+    if(aktivitasIds.has(p.id)) return false; // ada aktivitas stok apapun (pembelian/edit manual/opname) — bukan hantu
     if(!p.last_opname_at) return true;
     return p.last_opname_at.slice(0,10) < sejakTanggal;
   });
@@ -3901,7 +3911,7 @@ function ProdukBelumOpnameTool({onBack}) {
     <div style={{padding:16,maxWidth:600,margin:'0 auto',paddingBottom:100}}>
       <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
       <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🔎 Produk Belum Ter-opname</h2>
-      <div style={{fontSize:12,color:MT,marginBottom:14}}>Produk yang belum pernah dikonfirmasi lewat Stok Opname AI sejak tanggal tertentu — kemungkinan sudah tidak ada fisiknya, tapi masih tercatat di sistem.</div>
+      <div style={{fontSize:12,color:MT,marginBottom:14}}>Produk yang belum ada aktivitas stok sama sekali (opname, pembelian, atau edit manual) sejak tanggal tertentu — kemungkinan sudah tidak ada fisiknya, tapi masih tercatat di sistem. Produk yang baru dibeli/di-edit stoknya otomatis dikecualikan dari daftar ini.</div>
 
       <div style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
         <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Anggap "belum di-opname" kalau sejak tanggal:</label>
@@ -8665,7 +8675,7 @@ function Keuangan({refreshKey}) {
 
 
 // ── LAPORAN PENJUALAN BARANG ───────────────────────────────────────────────
-function LaporanPenjualanBarang({period}) {
+function LaporanPenjualanBarang({dari, sampai}) {
   const [data, setData]       = useState([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy]   = useState('omset'); // omset | qty
@@ -8674,18 +8684,13 @@ function LaporanPenjualanBarang({period}) {
     (async()=>{
       setLoading(true);
       try {
-        const days = parseInt(period)||30;
-        const since = new Date();
-        since.setDate(since.getDate()-days);
-        const sinceStr = since.toISOString();
-
         const [txs, items] = await Promise.all([
           sbGetAll('transactions',{order:'created_at'}),
           sbGetAll('transaction_items',{order:'id'}),
         ]);
 
         const validTxIds = new Set(
-          txs.filter(t=>t.created_at>=sinceStr&&t.status==='Lunas').map(t=>t.id)
+          txs.filter(t=>{const d=t.created_at?.slice(0,10); return d>=dari&&d<=sampai&&t.status==='Lunas';}).map(t=>t.id)
         );
 
         const map = {};
@@ -8702,7 +8707,7 @@ function LaporanPenjualanBarang({period}) {
       } catch(e){}
       setLoading(false);
     })();
-  },[period, sortBy]);
+  },[dari, sampai, sortBy]);
 
   const totalOmset = data.reduce((s,d)=>s+d.omset,0);
   const totalQty   = data.reduce((s,d)=>s+d.qty,0);
@@ -8713,7 +8718,7 @@ function LaporanPenjualanBarang({period}) {
   return (
     <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-        <div style={{fontWeight:700,fontSize:14}}>🏪 Penjualan Barang ({period} Hari)</div>
+        <div style={{fontWeight:700,fontSize:14}}>🏪 Penjualan Barang ({dari} s/d {sampai})</div>
         <div style={{display:'flex',gap:6}}>
           {[['omset','Omset'],['qty','Qty']].map(([val,label])=>(
             <button key={val} onClick={()=>setSortBy(val)}
@@ -8765,7 +8770,7 @@ function LaporanPenjualanBarang({period}) {
 }
 
 // ── LAPORAN PENJUALAN KATEGORI ─────────────────────────────────────────────
-function LaporanPenjualanKategori({period}) {
+function LaporanPenjualanKategori({dari, sampai}) {
   const [data, setData]       = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -8773,11 +8778,6 @@ function LaporanPenjualanKategori({period}) {
     (async()=>{
       setLoading(true);
       try {
-        const days = parseInt(period)||30;
-        const since = new Date();
-        since.setDate(since.getDate()-days);
-        const sinceStr = since.toISOString();
-
         const [txs, items, prods] = await Promise.all([
           sbGetAll('transactions',{order:'created_at'}),
           sbGetAll('transaction_items',{order:'id'}),
@@ -8785,7 +8785,7 @@ function LaporanPenjualanKategori({period}) {
         ]);
 
         const validTxIds = new Set(
-          txs.filter(t=>t.created_at>=sinceStr&&t.status==='Lunas').map(t=>t.id)
+          txs.filter(t=>{const d=t.created_at?.slice(0,10); return d>=dari&&d<=sampai&&t.status==='Lunas';}).map(t=>t.id)
         );
 
         const prodMap = {};
@@ -8804,7 +8804,7 @@ function LaporanPenjualanKategori({period}) {
       } catch(e){}
       setLoading(false);
     })();
-  },[period]);
+  },[dari, sampai]);
 
   const totalOmset = data.reduce((s,d)=>s+d.omset,0);
   const colors = ['#2ECC71','#3498DB','#E74C3C','#F39C12','#9B59B6','#1ABC9C','#E67E22','#34495E'];
@@ -8813,7 +8813,7 @@ function LaporanPenjualanKategori({period}) {
 
   return (
     <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
-      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>📂 Penjualan per Kategori ({period} Hari)</div>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>📂 Penjualan per Kategori ({dari} s/d {sampai})</div>
 
       {data.length===0 ? (
         <div style={{textAlign:'center',padding:'32px 0',color:MT}}>Belum ada data</div>
@@ -8845,7 +8845,7 @@ function LaporanPenjualanKategori({period}) {
 }
 
 // ── LAPORAN METODE PEMBAYARAN ─────────────────────────────────────────────
-function LaporanMetodePembayaran({period}) {
+function LaporanMetodePembayaran({dari, sampai}) {
   const [data, setData]       = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -8853,13 +8853,8 @@ function LaporanMetodePembayaran({period}) {
     (async()=>{
       setLoading(true);
       try {
-        const days = parseInt(period)||30;
-        const since = new Date();
-        since.setDate(since.getDate()-days);
-        const sinceStr = since.toISOString();
-
         const txs = await sbGetAll('transactions',{order:'created_at'});
-        const filtered = txs.filter(t=>t.created_at>=sinceStr&&t.status==='Lunas');
+        const filtered = txs.filter(t=>{const d=t.created_at?.slice(0,10); return d>=dari&&d<=sampai&&t.status==='Lunas';});
 
         const map = {};
         filtered.forEach(t=>{
@@ -8873,7 +8868,7 @@ function LaporanMetodePembayaran({period}) {
       } catch(e){}
       setLoading(false);
     })();
-  },[period]);
+  },[dari, sampai]);
 
   const totalOmset = data.reduce((s,d)=>s+d.total,0);
   const metodeIcons = {'Tunai':'💵','QRIS':'📱','Transfer':'🏦'};
@@ -8883,7 +8878,7 @@ function LaporanMetodePembayaran({period}) {
 
   return (
     <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
-      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>💳 Metode Pembayaran ({period} Hari)</div>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>💳 Metode Pembayaran ({dari} s/d {sampai})</div>
 
       {data.length===0 ? (
         <div style={{textAlign:'center',padding:'32px 0',color:MT}}>Belum ada data</div>
@@ -8929,7 +8924,7 @@ function LaporanMetodePembayaran({period}) {
 }
 
 // ── LAPORAN ARUS STOK ─────────────────────────────────────────────────────
-function LaporanArusStok({period}) {
+function LaporanArusStok({dari, sampai}) {
   const [logs, setLogs]       = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter]   = useState('semua'); // semua | masuk | keluar
@@ -8938,17 +8933,12 @@ function LaporanArusStok({period}) {
     (async()=>{
       setLoading(true);
       try {
-        const days = parseInt(period)||30;
-        const since = new Date();
-        since.setDate(since.getDate()-days);
-        const sinceStr = since.toISOString();
-
         const all = await sbGetAll('stock_logs',{order:'created_at',asc:false});
-        setLogs(all.filter(l=>l.created_at>=sinceStr));
+        setLogs(all.filter(l=>{const d=l.created_at?.slice(0,10); return d>=dari&&d<=sampai;}));
       } catch(e){}
       setLoading(false);
     })();
-  },[period]);
+  },[dari, sampai]);
 
   const filtered = logs.filter(l=>filter==='semua'||l.type===filter);
   const totalMasuk  = logs.filter(l=>l.type==='masuk').reduce((s,l)=>s+l.qty,0);
@@ -8958,7 +8948,7 @@ function LaporanArusStok({period}) {
 
   return (
     <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
-      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>📦 Arus Stok ({period} Hari)</div>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>📦 Arus Stok ({dari} s/d {sampai})</div>
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
         <div style={{background:'#E8F5E9',borderRadius:8,padding:'8px 12px',borderLeft:`3px solid ${G}`}}>
@@ -9006,7 +8996,7 @@ function LaporanArusStok({period}) {
 
 
 // ── RETUR HISTORY ─────────────────────────────────────────────────────────
-function ReturHistory({period}) {
+function ReturHistory({dari, sampai}) {
   const [returns, setReturns] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -9014,16 +9004,12 @@ function ReturHistory({period}) {
     (async()=>{
       setLoading(true);
       try {
-        const days = parseInt(period)||30;
-        const since = new Date();
-        since.setDate(since.getDate()-days);
-        const sinceStr = since.toISOString();
         const all = await sbGetAll('returns',{order:'created_at',asc:false});
-        setReturns(all.filter(r=>r.created_at>=sinceStr));
+        setReturns(all.filter(r=>{const d=r.created_at?.slice(0,10); return d>=dari&&d<=sampai;}));
       } catch(e){}
       setLoading(false);
     })();
-  },[period]);
+  },[dari, sampai]);
 
   const totalDariPelanggan = returns.filter(r=>r.type==='dari_pelanggan').reduce((s,r)=>s+r.total,0);
   const totalKeSupplier    = returns.filter(r=>r.type==='ke_supplier').reduce((s,r)=>s+r.total,0);
@@ -9032,7 +9018,7 @@ function ReturHistory({period}) {
 
   return (
     <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
-      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>🔄 Riwayat Retur {period} Hari Terakhir</div>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>🔄 Riwayat Retur ({dari} s/d {sampai})</div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
         <div style={{background:'#FFF0F0',borderRadius:10,padding:'10px 14px',borderLeft:`3px solid ${RD}`}}>
           <div style={{fontSize:11,color:MT}}>🔄 Dari Pelanggan</div>
@@ -10663,23 +10649,18 @@ function RingkasanPenjualan({period, onBack}) {
 
 // ── LAPORAN LABA RUGI DETAIL ───────────────────────────────────────────────
 function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
-  const [periode, setPeriode] = useState('bulan');
+  const [periode, setPeriode] = useState('bulan_ini');
+  const [customFrom, setCustomFrom] = useState(localDateStr());
+  const [customTo, setCustomTo] = useState(localDateStr());
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [openDay, setOpenDay] = useState(null);
   const [showBeforePiutang, setShowBeforePiutang] = useState(false);
 
-  const today = new Date().toISOString().slice(0,10);
-
   const load = async() => {
     setLoading(true);
     try {
-      let dari, sampai;
-      if(periode==='hari_ini') { dari=today; sampai=today; }
-      else if(periode==='bulan') {
-        dari = new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
-        sampai = today;
-      }
+      const {dari, sampai} = computeDateRange(periode, customFrom, customTo);
 
       const [txs, items, prods, rets, retItems] = await Promise.all([
         sbGetAll('transactions',{order:'created_at',asc:false}),
@@ -10764,7 +10745,7 @@ function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
     setLoading(false);
   };
 
-  useEffect(()=>{ load(); },[periode,showBeforePiutang]);
+  useEffect(()=>{ load(); },[periode,customFrom,customTo,showBeforePiutang]);
 
   return (
     <div style={{padding:16,maxWidth:700,margin:'0 auto'}}>
@@ -10775,14 +10756,7 @@ function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
 
       {/* Filter */}
       <div style={{background:'#fff',borderRadius:12,padding:12,marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)'}}>
-        <div style={{display:'flex',gap:6,marginBottom:10}}>
-          {[['hari_ini','Hari Ini'],['bulan','Bulan Ini']].map(([val,label])=>(
-            <button key={val} onClick={()=>setPeriode(val)}
-              style={{padding:'6px 14px',border:`1.5px solid ${periode===val?G:'#eee'}`,borderRadius:16,background:periode===val?G:'#fff',color:periode===val?'#fff':MT,fontSize:12,fontWeight:periode===val?700:500,cursor:'pointer'}}>
-              {label}
-            </button>
-          ))}
-        </div>
+        <PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/>
         <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:12}}>
           <input type="checkbox" checked={showBeforePiutang} onChange={e=>setShowBeforePiutang(e.target.checked)} style={{width:15,height:15,accentColor:G}}/>
           <span>Tampilkan Pemasukan Sebelum Piutang dibayar</span>
@@ -10869,7 +10843,9 @@ function LaporanLabaRugiDetail({onBack, onOpenInvoice}) {
 
 // ── ARUS KEUANGAN DETAIL ───────────────────────────────────────────────────
 function ArusKeuanganDetail({onBack, onOpenInvoice}) {
-  const [periode, setPeriode] = useState('bulan');
+  const [periode, setPeriode] = useState('bulan_ini');
+  const [customFrom, setCustomFrom] = useState(localDateStr());
+  const [customTo, setCustomTo] = useState(localDateStr());
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [openDay, setOpenDay] = useState(null);
@@ -10879,12 +10855,7 @@ function ArusKeuanganDetail({onBack, onOpenInvoice}) {
   const load = async() => {
     setLoading(true);
     try {
-      let dari, sampai;
-      if(periode==='hari_ini') { dari=today; sampai=today; }
-      else {
-        dari = new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
-        sampai = today;
-      }
+      const {dari, sampai} = computeDateRange(periode, customFrom, customTo);
 
       const [txs, pos, debts, pays] = await Promise.all([
         sbGetAll('transactions',{order:'created_at',asc:false}),
@@ -10961,7 +10932,7 @@ function ArusKeuanganDetail({onBack, onOpenInvoice}) {
     setLoading(false);
   };
 
-  useEffect(()=>{ load(); },[periode]);
+  useEffect(()=>{ load(); },[periode,customFrom,customTo]);
 
   return (
     <div style={{padding:16,maxWidth:700,margin:'0 auto'}}>
@@ -10970,14 +10941,7 @@ function ArusKeuanganDetail({onBack, onOpenInvoice}) {
         <h2 style={{margin:0,fontSize:17,fontWeight:800}}>💸 Laporan Arus Keuangan</h2>
       </div>
 
-      <div style={{display:'flex',gap:6,marginBottom:12}}>
-        {[['hari_ini','Hari Ini'],['bulan','Bulan Ini']].map(([val,label])=>(
-          <button key={val} onClick={()=>setPeriode(val)}
-            style={{padding:'6px 14px',border:`1.5px solid ${periode===val?G:'#eee'}`,borderRadius:16,background:periode===val?G:'#fff',color:periode===val?'#fff':MT,fontSize:12,fontWeight:periode===val?700:500,cursor:'pointer'}}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/>
 
       {loading?<Loading/>:!data?null:(
         <>
@@ -11076,7 +11040,9 @@ function ArusKeuanganDetail({onBack, onOpenInvoice}) {
 function LaporanPembelian({onBack}) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [periode, setPeriode] = useState('bulan');
+  const [periode, setPeriode] = useState('bulan_ini');
+  const [customFrom, setCustomFrom] = useState(localDateStr());
+  const [customTo, setCustomTo] = useState(localDateStr());
   const [selected, setSelected] = useState(null);
   const [poItems, setPoItems] = useState([]);
   const [returSupplier, setReturSupplier] = useState([]);
@@ -11087,11 +11053,9 @@ function LaporanPembelian({onBack}) {
   const load = async() => {
     setLoading(true);
     try {
-      let dari;
-      if(periode==='hari_ini') dari=today;
-      else dari=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
+      const {dari, sampai} = computeDateRange(periode, customFrom, customTo);
       const pos = await sbGetAll('purchase_orders',{order:'created_at',asc:false});
-      const filtered = pos.filter(p=>p.created_at?.slice(0,10)>=dari);
+      const filtered = pos.filter(p=>p.created_at?.slice(0,10)>=dari && p.created_at?.slice(0,10)<=sampai);
       const withItems = await Promise.all(filtered.map(async po=>({
         ...po, items: await sbGet('po_items',{eq:{po_id:po.id}})
       })));
@@ -11099,12 +11063,12 @@ function LaporanPembelian({onBack}) {
       // Retur ke supplier: dari tabel returns + riwayat revisi PO (tipe retur)
       try {
         const rets = await sbGetAll('returns',{order:'created_at',asc:false});
-        const fromReturns = rets.filter(r=>r.type==='ke_supplier'&&r.created_at?.slice(0,10)>=dari)
+        const fromReturns = rets.filter(r=>r.type==='ke_supplier'&&r.created_at?.slice(0,10)>=dari&&r.created_at?.slice(0,10)<=sampai)
           .map(r=>({tanggal:r.created_at?.slice(0,10), ref:r.return_no, supplier:r.supplier||'-', alasan:r.reason||'-', total:r.total||0, po:null}));
         const fromRevisi = [];
         pos.forEach(po=>{
           (Array.isArray(po.revisions)?po.revisions:[]).forEach(rev=>{
-            if(rev.tipe==='retur'&&rev.tanggal?.slice(0,10)>=dari){
+            if(rev.tipe==='retur'&&rev.tanggal?.slice(0,10)>=dari&&rev.tanggal?.slice(0,10)<=sampai){
               fromRevisi.push({
                 tanggal: rev.tanggal?.slice(0,10),
                 ref: 'PO-'+po.id,
@@ -11122,7 +11086,7 @@ function LaporanPembelian({onBack}) {
     setLoading(false);
   };
 
-  useEffect(()=>{ load(); },[periode]);
+  useEffect(()=>{ load(); },[periode,customFrom,customTo]);
 
   const totalBeli = orders.reduce((s,o)=>s+(o.total||0),0);
   const sC = {Diterima:G, Proses:OR, Dibatalkan:RD};
@@ -11172,14 +11136,7 @@ function LaporanPembelian({onBack}) {
         <h2 style={{margin:0,fontSize:17,fontWeight:800}}>📦 Laporan Pembelian</h2>
       </div>
 
-      <div style={{display:'flex',gap:6,marginBottom:12}}>
-        {[['hari_ini','Hari Ini'],['bulan','Bulan Ini']].map(([val,label])=>(
-          <button key={val} onClick={()=>setPeriode(val)}
-            style={{padding:'6px 14px',border:`1.5px solid ${periode===val?G:'#eee'}`,borderRadius:16,background:periode===val?G:'#fff',color:periode===val?'#fff':MT,fontSize:12,fontWeight:periode===val?700:500,cursor:'pointer'}}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/>
 
       <div style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:12,boxShadow:'0 1px 6px rgba(0,0,0,0.07)',display:'flex',justifyContent:'space-between'}}>
         <div><div style={{fontSize:11,color:MT}}>Total Pembelian</div><div style={{fontWeight:800,fontSize:18,color:RD,marginTop:2}}>{fmt(totalBeli)}</div></div>
@@ -11331,21 +11288,24 @@ function LaporanPengunjung({onBack}) {
 // ── LAPORAN MAIN (Menu) ────────────────────────────────────────────────────
 function Laporan({refreshKey}) {
   const [subPage, setSubPage] = useState(null);
-  const [period, setPeriod]   = useState('30');
+  const [periode, setPeriode] = useState('hari_ini');
+  const [customFrom, setCustomFrom] = useState(localDateStr());
+  const [customTo, setCustomTo] = useState(localDateStr());
+  const {dari, sampai} = computeDateRange(periode, customFrom, customTo);
   const [targetTxId, setTargetTxId] = useState(null);
   const gotoInvoice = (txId)=>{ if(!txId) return; setTargetTxId(txId); setSubPage('penjualan'); };
 
-  if(subPage==='ringkasan')   return <RingkasanPenjualan period={period} onBack={()=>setSubPage(null)}/>;
+  if(subPage==='ringkasan')   return <RingkasanPenjualan onBack={()=>setSubPage(null)}/>;
   if(subPage==='labarugi')    return <LaporanLabaRugiDetail onBack={()=>setSubPage(null)} onOpenInvoice={gotoInvoice}/>;
   if(subPage==='aruskeuangan')return <ArusKeuanganDetail onBack={()=>setSubPage(null)} onOpenInvoice={gotoInvoice}/>;
   if(subPage==='penjualan')   return <LaporanPenjualan onBack={()=>setSubPage(null)} initialTxId={targetTxId} onConsumeTarget={()=>setTargetTxId(null)}/>;
   if(subPage==='pembelian')   return <LaporanPembelian onBack={()=>setSubPage(null)}/>;
   if(subPage==='pengunjung')  return <LaporanPengunjung onBack={()=>setSubPage(null)}/>;
-  if(subPage==='barang')      return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><LaporanPenjualanBarang period={period}/></div>;
-  if(subPage==='kategori')    return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><LaporanPenjualanKategori period={period}/></div>;
-  if(subPage==='metode')      return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><LaporanMetodePembayaran period={period}/></div>;
-  if(subPage==='arus')        return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><LaporanArusStok period={period}/></div>;
-  if(subPage==='retur')       return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><ReturHistory period={period}/></div>;
+  if(subPage==='barang')      return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/><LaporanPenjualanBarang dari={dari} sampai={sampai}/></div>;
+  if(subPage==='kategori')    return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/><LaporanPenjualanKategori dari={dari} sampai={sampai}/></div>;
+  if(subPage==='metode')      return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/><LaporanMetodePembayaran dari={dari} sampai={sampai}/></div>;
+  if(subPage==='arus')        return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/><LaporanArusStok dari={dari} sampai={sampai}/></div>;
+  if(subPage==='retur')       return <div style={{padding:16}}><button onClick={()=>setSubPage(null)} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14}}>← Kembali</button><PeriodeFilterBar periode={periode} setPeriode={setPeriode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo}/><ReturHistory dari={dari} sampai={sampai}/></div>;
   if(subPage==='txlist')      return <LaporanPenjualanTx onBack={()=>setSubPage(null)}/>;
   if(subPage==='zakat')       return <ZakatMalCalculator onBack={()=>setSubPage(null)}/>;
 
@@ -11363,16 +11323,6 @@ function Laporan({refreshKey}) {
   return (
     <div style={{padding:16,maxWidth:700,margin:'0 auto'}}>
       <h2 style={{margin:'0 0 16px',fontSize:18,fontWeight:800}}>📊 Laporan</h2>
-
-      {/* Filter periode global */}
-      <div style={{display:'flex',gap:6,marginBottom:16}}>
-        {[['7','7 Hari'],['30','30 Hari'],['90','3 Bulan']].map(([val,label])=>(
-          <button key={val} onClick={()=>setPeriod(val)}
-            style={{padding:'6px 14px',border:`1.5px solid ${period===val?G:'#ddd'}`,borderRadius:20,background:period===val?G:'#fff',color:period===val?'#fff':TX,fontWeight:period===val?700:500,cursor:'pointer',fontSize:12}}>
-            {label}
-          </button>
-        ))}
-      </div>
 
       <div style={{background:'#fff',borderRadius:14,overflow:'hidden',boxShadow:'0 2px 10px rgba(0,0,0,0.06)'}}>
         {menuItems.map((item,i)=>(
@@ -12989,6 +12939,48 @@ function localDateStr(d=new Date()) {
   const m = String(d.getMonth()+1).padStart(2,'0');
   const day = String(d.getDate()).padStart(2,'0');
   return `${y}-${m}-${day}`;
+}
+
+// ── Helper bersama: hitung rentang tanggal (dari/sampai) dari pilihan periode ──
+// Dipakai konsisten di semua laporan (Pembelian, Arus Keuangan, Laba Rugi, dll)
+function computeDateRange(periode, customFrom, customTo) {
+  const today = localDateStr();
+  const now = new Date();
+  if(periode==='hari_ini') return {dari:today, sampai:today};
+  if(periode==='bulan_ini') return {dari:localDateStr(new Date(now.getFullYear(),now.getMonth(),1)), sampai:today};
+  if(periode==='bulan_lalu') {
+    const y = now.getMonth()===0 ? now.getFullYear()-1 : now.getFullYear();
+    const m = now.getMonth()===0 ? 11 : now.getMonth()-1;
+    return { dari: localDateStr(new Date(y,m,1)), sampai: localDateStr(new Date(y,m+1,0)) };
+  }
+  if(periode==='custom') return {dari:customFrom||today, sampai:customTo||today};
+  return {dari:today, sampai:today};
+}
+
+// ── Komponen filter periode yang dipakai berulang di berbagai laporan ──
+function PeriodeFilterBar({periode, setPeriode, customFrom, setCustomFrom, customTo, setCustomTo, options}) {
+  const opts = options || [['hari_ini','Hari Ini'],['bulan_ini','Bulan Ini'],['bulan_lalu','Bulan Lalu'],['custom','Custom']];
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:periode==='custom'?8:0}}>
+        {opts.map(([val,label])=>(
+          <button key={val} onClick={()=>setPeriode(val)}
+            style={{padding:'6px 14px',border:`1.5px solid ${periode===val?G:'#eee'}`,borderRadius:16,background:periode===val?G:'#fff',color:periode===val?'#fff':MT,fontSize:12,fontWeight:periode===val?700:500,cursor:'pointer'}}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {periode==='custom'&&(
+        <div style={{display:'flex',gap:8,alignItems:'center',background:'#F5F6FA',borderRadius:10,padding:'8px 10px'}}>
+          <input type="date" value={customFrom} onChange={e=>setCustomFrom(e.target.value)}
+            style={{flex:1,padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+          <span style={{fontSize:12,color:MT}}>s/d</span>
+          <input type="date" value={customTo} onChange={e=>setCustomTo(e.target.value)}
+            style={{flex:1,padding:'7px 10px',border:'1.5px solid #eee',borderRadius:8,fontSize:12,boxSizing:'border-box'}}/>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function parseQty(v) {
