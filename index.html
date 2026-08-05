@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-OPNAMESAFEGUARD";
+const APP_VERSION = "v14.07.2026-PROGRESOPNAME";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3431,7 +3431,7 @@ function Manajemen({initialProductId, onConsumeTarget}={}) {
         </button>
         <button onClick={()=>setView('produkBelumOpname')}
           style={{padding:"11px 14px",background:'#FFF0F0',color:RD,border:`1.5px solid ${RD}`,borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:16,whiteSpace:'nowrap'}}
-          title="Produk Belum Ter-opname">
+          title="Cek Progres Opname">
           🔎
         </button>
       </div>
@@ -3849,8 +3849,19 @@ function ProdukBelumOpnameTool({onBack}) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState({done:0,total:0});
+  const [mode, setMode] = useState('belum'); // belum | sudah
 
-  const [aktivitasIds, setAktivitasIds] = useState(new Set()); // product_id yang punya aktivitas stok apapun sejak cutoff
+  const [konfirmasiMap, setKonfirmasiMap] = useState({}); // product_id -> {tanggal, sumber} — konfirmasi terbaru sejak cutoff
+
+  const inferSumber = (notes) => {
+    if(!notes) return 'Lainnya';
+    if(notes.includes('Stok Opname')) return 'Stok Opname';
+    if(notes.includes('Pembelian')) return 'Pembelian';
+    if(notes.includes('Penyesuaian stok manual')) return 'Edit Manual';
+    if(notes.includes('Penjualan')) return 'Penjualan';
+    if(notes.includes('Retur')) return 'Retur';
+    return 'Lainnya';
+  };
 
   useEffect(()=>{
     (async()=>{
@@ -3862,7 +3873,19 @@ function ProdukBelumOpnameTool({onBack}) {
         ]);
         setProducts(prods||[]);
         const recentLogs = (logs||[]).filter(l=>l.created_at?.slice(0,10)>=sejakTanggal);
-        setAktivitasIds(new Set(recentLogs.map(l=>l.product_id)));
+        const map = {};
+        // Logs sudah urut terbaru dulu — ambil kemunculan pertama tiap produk (=paling baru)
+        recentLogs.forEach(l=>{
+          if(!map[l.product_id]) map[l.product_id] = {tanggal:l.created_at.slice(0,10), sumber:inferSumber(l.notes)};
+        });
+        // Opname yang "stok sudah sesuai" (tidak bikin log) tetap dihitung kalau lebih baru dari log yang ada
+        (prods||[]).forEach(p=>{
+          if(p.last_opname_at && p.last_opname_at.slice(0,10)>=sejakTanggal){
+            const tglOpname = p.last_opname_at.slice(0,10);
+            if(!map[p.id] || tglOpname>map[p.id].tanggal) map[p.id] = {tanggal:tglOpname, sumber:'Stok Opname'};
+          }
+        });
+        setKonfirmasiMap(map);
       } catch(e){}
       setLoading(false);
     })();
@@ -3870,11 +3893,15 @@ function ProdukBelumOpnameTool({onBack}) {
 
   const belumOpname = products.filter(p=>{
     if(p.pakai_stok===false) return false; // produk non-stok (jasa dll) tidak relevan
-    if(aktivitasIds.has(p.id)) return false; // ada aktivitas stok apapun (pembelian/edit manual/opname) — bukan hantu
+    if(konfirmasiMap[p.id]) return false; // sudah terkonfirmasi lewat aktivitas apapun sejak cutoff
     if(!p.last_opname_at) return true;
     return p.last_opname_at.slice(0,10) < sejakTanggal;
   });
+  const sudahTerkonfirmasi = products.filter(p=>p.pakai_stok!==false && konfirmasiMap[p.id]);
+  const daftarTampil = mode==='belum' ? belumOpname : sudahTerkonfirmasi;
+
   const totalModal = belumOpname.reduce((s,p)=>s+(p.stock||0)*(p.buy_price||0),0);
+  const totalModalKonfirmasi = sudahTerkonfirmasi.reduce((s,p)=>s+(p.stock||0)*(p.buy_price||0),0);
   const adaStok = belumOpname.filter(p=>(p.stock||0)>0);
 
   const toggleSelect = (id) => setSelectedIds(prev=>{
@@ -3910,17 +3937,28 @@ function ProdukBelumOpnameTool({onBack}) {
   return (
     <div style={{padding:16,maxWidth:600,margin:'0 auto',paddingBottom:100}}>
       <button onClick={onBack} style={{background:'none',border:'none',color:G,fontWeight:700,cursor:'pointer',fontSize:14,padding:0,marginBottom:14}}>← Kembali</button>
-      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🔎 Produk Belum Ter-opname</h2>
-      <div style={{fontSize:12,color:MT,marginBottom:14}}>Produk yang belum ada aktivitas stok sama sekali (opname, pembelian, atau edit manual) sejak tanggal tertentu — kemungkinan sudah tidak ada fisiknya, tapi masih tercatat di sistem. Produk yang baru dibeli/di-edit stoknya otomatis dikecualikan dari daftar ini.</div>
+      <h2 style={{margin:'0 0 4px',fontSize:18,fontWeight:800}}>🔎 Cek Progres Opname</h2>
+      <div style={{fontSize:12,color:MT,marginBottom:14}}>Pantau produk mana yang sudah/belum ada aktivitas stok (opname, pembelian, atau edit manual) sejak tanggal tertentu.</div>
 
       <div style={{background:'#fff',borderRadius:12,padding:'12px 16px',marginBottom:14,boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
-        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Anggap "belum di-opname" kalau sejak tanggal:</label>
+        <label style={{fontSize:11,color:MT,fontWeight:600,display:'block',marginBottom:4}}>Hitung sejak tanggal:</label>
         <input type="date" value={sejakTanggal} onChange={e=>setSejakTanggal(e.target.value)}
           style={{width:'100%',padding:'9px 12px',border:'1.5px solid #eee',borderRadius:8,fontSize:13,boxSizing:'border-box'}}/>
         <div style={{fontSize:10,color:MT,marginTop:4}}>Sesuaikan dengan kapan lo mulai proses hitung ulang stok toko.</div>
       </div>
 
-      {loading ? <Loading/> : (
+      <div style={{display:'flex',gap:6,marginBottom:14}}>
+        <button onClick={()=>setMode('belum')}
+          style={{flex:1,padding:'9px 4px',border:`1.5px solid ${mode==='belum'?RD:'#eee'}`,borderRadius:10,background:mode==='belum'?'#FFF0F0':'#fff',color:mode==='belum'?RD:MT,fontWeight:mode==='belum'?700:500,cursor:'pointer',fontSize:12}}>
+          ⚠️ Belum Terkonfirmasi
+        </button>
+        <button onClick={()=>setMode('sudah')}
+          style={{flex:1,padding:'9px 4px',border:`1.5px solid ${mode==='sudah'?G:'#eee'}`,borderRadius:10,background:mode==='sudah'?GL:'#fff',color:mode==='sudah'?GD:MT,fontWeight:mode==='sudah'?700:500,cursor:'pointer',fontSize:12}}>
+          ✅ Sudah Terkonfirmasi
+        </button>
+      </div>
+
+      {loading ? <Loading/> : mode==='belum' ? (
         <>
           <div style={{background:'linear-gradient(135deg,#FFF0F0,#FFF3D6)',border:`1.5px solid ${RD}`,borderRadius:12,padding:'12px 16px',marginBottom:14}}>
             <div style={{fontSize:11,color:RD,fontWeight:600,marginBottom:2}}>⚠️ {belumOpname.length} produk belum ter-opname — {adaStok.length} di antaranya masih ada stok</div>
@@ -3960,9 +3998,41 @@ function ProdukBelumOpnameTool({onBack}) {
             })}
           </div>
         </>
+      ) : (
+        <>
+          <div style={{background:'linear-gradient(135deg,#E8F5E9,#E0F7E9)',border:`1.5px solid ${G}`,borderRadius:12,padding:'12px 16px',marginBottom:14}}>
+            <div style={{fontSize:11,color:GD,fontWeight:600,marginBottom:2}}>✅ {sudahTerkonfirmasi.length} produk sudah terkonfirmasi sejak {sejakTanggal}</div>
+            <div style={{fontSize:22,fontWeight:800,color:GD}}>{fmt(totalModalKonfirmasi)}</div>
+            <div style={{fontSize:10,color:'#1B7A43',marginTop:2}}>Total modal yang datanya sudah bisa dipercaya (opname/pembelian/edit manual)</div>
+          </div>
+
+          <div style={{background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.07)'}}>
+            {sudahTerkonfirmasi.length===0 && <div style={{textAlign:'center',padding:32,color:MT}}>Belum ada produk yang terkonfirmasi sejak tanggal ini.</div>}
+            {sudahTerkonfirmasi.map((p,i)=>{
+              const modal = (p.stock||0)*(p.buy_price||0);
+              const info = konfirmasiMap[p.id];
+              return (
+                <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 14px',borderBottom:i<sudahTerkonfirmasi.length-1?'1px solid #f0f0f0':'none'}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                    <div style={{fontSize:11,color:MT,marginTop:1}}>
+                      Stok: {p.stock||0} {p.unit_kecil||'pcs'} {modal>0&&`· Modal: ${fmt(modal)}`}
+                    </div>
+                  </div>
+                  {info&&(
+                    <div style={{textAlign:'right',flexShrink:0}}>
+                      <div style={{fontSize:10,fontWeight:700,color:GD,background:GL,borderRadius:5,padding:'2px 7px'}}>{info.sumber}</div>
+                      <div style={{fontSize:9,color:MT,marginTop:2}}>{info.tanggal}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
-      {adaStok.length>0 && selectedIds.size>0 && (
+      {mode==='belum' && adaStok.length>0 && selectedIds.size>0 && (
         <div style={{position:'fixed',bottom:64,left:0,right:0,background:'#fff',borderTop:'1px solid #eee',padding:'12px 16px',boxShadow:'0 -4px 16px rgba(0,0,0,0.1)',zIndex:60,maxWidth:600,margin:'0 auto'}}>
           {saving&&<div style={{fontSize:12,color:MT,textAlign:'center',marginBottom:8}}>⏳ Memproses {progress.done}/{progress.total}...</div>}
           <button onClick={nolkanStok} disabled={saving}
