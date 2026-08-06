@@ -72,7 +72,7 @@ input,select{font-family:inherit}
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Supabase ───────────────────────────────────────────────────────────────
-const APP_VERSION = "v14.07.2026-PROGRESOPNAME";
+const APP_VERSION = "v14.07.2026-KONFIRMASIFIX";
 console.log("%c🏪 MyKasir "+APP_VERSION, "color:#2ecc71;font-weight:bold;font-size:14px");
 const SB_URL = "https://myegtnvbdaandmtuxurd.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZWd0bnZiZGFhbmRtdHV4dXJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMDYyMjksImV4cCI6MjA5ODc4MjIyOX0.sW_CYjPKgyB51rVu7Xpm4YZr5Ye5U7vNPIm4JoQhJuE";
@@ -3872,7 +3872,8 @@ function ProdukBelumOpnameTool({onBack}) {
           sbGetAll('stock_logs',{order:'created_at',asc:false}),
         ]);
         setProducts(prods||[]);
-        const recentLogs = (logs||[]).filter(l=>l.created_at?.slice(0,10)>=sejakTanggal);
+        const SUMBER_VALID = ['Stok Opname','Pembelian','Edit Manual']; // penjualan/retur TIDAK menghitung sebagai konfirmasi stok
+        const recentLogs = (logs||[]).filter(l=>l.created_at?.slice(0,10)>=sejakTanggal && SUMBER_VALID.includes(inferSumber(l.notes)));
         const map = {};
         // Logs sudah urut terbaru dulu — ambil kemunculan pertama tiap produk (=paling baru)
         recentLogs.forEach(l=>{
